@@ -1,0 +1,21 @@
+[package]
+name = "vulkan-testing"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+winit = "0.30.5"
+bytemuck = { version = "1.21.0", features = ["derive"] }
+ash = "0.38.0"
+vek = { version = "0.17.1", features = ["bytemuck"]}
+raw-window-handle = "0.6.2"
+ash-window = "0.13.0"
+gpu-allocator = { version = "0.27.0", default-features = false, features = ["vulkan"] }
+env_logger = "0.10.0"
+log = "0.4.17"
+cfg-if = "1.0.0"
+
+[build-dependencies]
+slang = { git = "https://github.com/FloatyMonkey/slang-rs.git" }
