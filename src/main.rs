@@ -812,6 +812,10 @@ impl ApplicationHandler for App {
                     inner.click(left);
                 }
 
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyP)).pressed() {
+                    dbg!(delta);
+                }
+
                 inner.window.request_redraw();
                 inner.render(delta, elapsed);
                 self.last = new;

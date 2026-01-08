@@ -20,33 +20,11 @@ void main(uint3 id: SV_DispatchThreadID) {
     int noisy = (int)(noise((float2)id.xz * 0.1) * 10);
     int base = id.y - 15;
     base += noisy * 0.5;
-    base += hash13(id) * 4;
-    bool reflective = false;
-    bool refractive = false;
-
-    if (hash13(id * 3.432) > 0.95 && id.y == 40) {
-        base = -2;
-    }
-
-
-    if (hash12(floor(id.xz / 4)) > 0.99) {
-        base -= 10;
-        if (hash13(id) > 0.8) {
-            base -= 30;
-            refractive = true;
-        }
-
-        // TODO: reflections don't work with the current shadow surface optimization1!!!
-        if (hash12(id.xz) > 0.2) {
-            base -= 30;
-            reflective = true;
-        }
-    }
 
     Voxel voxel;
     voxel.active = base < 0;
-    voxel.reflective = reflective;
-    voxel.refractive = refractive;
+    voxel.reflective = false;
+    voxel.refractive = false;
     voxels[id] = voxel.into_raw();
 }
 
@@ -73,51 +51,19 @@ uint calculate_enabled_faces(uint3 id) {
     return enabled_faces;
 }
 
-static const uint SHADOW_ITER_COUNT = 32;
-static const uint SHADOW_SAMPLES_PER_TICK = 4;
+static const uint SHADOW_SAMPLES_PER_TICK = 32;
 static const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
 static const bool SHADOW_TEMPORAL = false;
 static const bool SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR = true;
 static const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR = 5.0;
 static const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN = 0.4;
-static const float SHADOW_ANGLE_SPREAD_FACTOR = 0.0;
-
-// TODO: need to calculate how "close" we get to the surface...
-float3 dda_shadownate(
-    RWTexture3D<uint8_t> voxels,
-    float3 ray_dir,
-    float3 ray_pos,
-) {
-    float3 floored_pos = floor(ray_pos);
-    float3 inv_dir = 1 / ray_dir;
-    float3 dir_sign = sign(ray_dir);
-    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-    Fetcher fetcher = Fetcher(voxels);
-    float3 color = 1.0;
-
-    for (int i = 0; i < SHADOW_ITER_COUNT; i++) {
-        Voxel voxel = fetcher.fetch((int3)(floored_pos));
-
-        if (voxel.active && voxel.refractive) {
-            color *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
-        }
-
-        if (voxel.active && !voxel.refractive) {
-            return 0.0;
-        }
-
-        float3 reconst = side_dist * inv_dir;
-        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
-        floored_pos += dir_sign * eqs;
-        side_dist += dir_sign * eqs;
-    }
-
-    return color;
-}
+static const float SHADOW_ANGLE_SPREAD_FACTOR = 0.02;
 
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
+    return;
+    
     // this basically moves the block down if the block underneath it is empty air
     // this simulates gravity
     /*
@@ -143,15 +89,27 @@ void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float
     if (tick == 0) {
         uint enabled_faces = calculate_enabled_faces(id);
 
+        /*
+        AllMemoryBarrier();
+
+        if (counter[0].load(MemoryOrder.Relaxed) > 0) {
+            counter[0];
+        }
+
+        AllMemoryBarrier();
+        */
+
         if (enabled_faces > 0) {
+            uint prev_packed_index = voxel_indices[id];
+            uint prev_block_index = prev_packed_index & ~(111111 << 26);
+
             uint block_index = counter[0].add(countbits(enabled_faces), MemoryOrder.Relaxed);
             packed_index = block_index;
             packed_index |= enabled_faces << (32 - 6);
             voxel_indices[id] = packed_index;
 
             for (int i = 0; i < countbits(enabled_faces); i++) {
-                SurfaceData data = SurfaceData();
-                data.colors[0] = uint8_t4(0);
+                SurfaceData data = surface_data_buffer[prev_block_index + i];
                 surface_data_buffer[block_index + i] = data;
             }
         } else {

@@ -99,7 +99,7 @@ bool dda(
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
     Fetcher fetcher = Fetcher(voxels);
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 32; i++) {
         Voxel voxel = fetcher.fetch((int3)(floored_pos));
 
         if (voxel.active) {
@@ -116,6 +116,41 @@ bool dda(
     iter = 16;
     return false;
 }
+
+
+// TODO: need to calculate how "close" we get to the surface...
+float3 dda_shadownate(
+    RWTexture3D<uint8_t> voxels,
+    float3 ray_dir,
+    float3 ray_pos,
+) {
+    float3 floored_pos = floor(ray_pos);
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
+    Fetcher fetcher = Fetcher(voxels);
+    float3 color = 1.0;
+
+    for (int i = 0; i < 32; i++) {
+        Voxel voxel = fetcher.fetch((int3)(floored_pos));
+
+        if (voxel.active && voxel.refractive) {
+            color *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
+        }
+
+        if (voxel.active && !voxel.refractive) {
+            return 0.0;
+        }
+
+        float3 reconst = side_dist * inv_dir;
+        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
+        floored_pos += dir_sign * eqs;
+        side_dist += dir_sign * eqs;
+    }
+
+    return color;
+}
+
 
 float3 normal(int face, float3 sign) {
     return -(float3)(face == int3(0, 1, 2)) * sign;

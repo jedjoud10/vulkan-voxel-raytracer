@@ -22,7 +22,9 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     uvs.x = -uvs.x;
 
     float3 ray_dir = normalize((mul(mat, float4(uvs, 1, 0))).xyz);
-    float3 ray_pos = position.xyz + ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
+    float3 ray_pos = position.xyz;
+    //ray_pos += ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
+
     float3 floored_pos = floor(ray_pos);
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
@@ -53,7 +55,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
             if (voxel.refractive || voxel.reflective) {
                 //normal += float3(sin(world.x * 10 + 0.2565), cos(world.y * 10 + 0.89684), sin(world.z * 10 - 0.211256)) * 0.12;
-                //normal += (hash33(uv * float3(23.231, -435.4354, 9412.1)) - 0.5) * 0.05;
+                normal += (hash33(uv * float3(23.231, -435.4354, 9412.1)) - 0.5) * 0.05;
                 normal = normalize(normal);
 
                 if (voxel.refractive) {
@@ -96,6 +98,9 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                 uint funny_index_magic = voxels_indices[(uint3)floored_pos];
 
                 float3 shadow = 0.0;
+                uint tmp = 0;
+                shadow = dda_shadownate(voxels, sun.xyz, world + sun.xyz * 0.01);
+                /*
                 uint funny_index = funny_index_magic & ~(0b111111 << (32 - 6));
                 if (funny_index != INVALID) {
                     uint enabled_faces = (funny_index_magic >> (32 - 6)) & 0b111111;
@@ -111,6 +116,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                     uint converted_to_flat_index = pixels.x + pixels.y * 4;
                     shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
                 }
+                */
                 
                 ao_solver solver;
                 solver.fetcher = fetcher;
@@ -120,6 +126,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                 solver.sign = dir_sign;
                 float ao = solver.ao();
 
+                //color = (float)i / 128;
                 color = light(sun.xyz, fetcher, (uint3)floored_pos, world, ray_dir, uv, normal, ao, shadow);
                 break;
             }
