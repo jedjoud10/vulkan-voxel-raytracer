@@ -276,7 +276,7 @@ impl InternalApp {
             allocator,
             voxel_image,
             rt_images,
-            ticker: ticker::Ticker { ticks_per_second: 120f32, accumulator: 0f32, count: 0 },
+            ticker: ticker::Ticker { ticks_per_second: 15f32, accumulator: 0f32, count: 0 },
             voxel_surface_buffer,
             voxel_surface_index_image,
             voxel_surface_counter_buffer,
