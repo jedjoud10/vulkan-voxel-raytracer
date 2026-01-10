@@ -9,32 +9,23 @@ use slang::Downcast;
 
 fn load_module(session: &mut slang::Session, file_name: &str) {
     let module = session.load_module(&format!("{file_name}.slang")).unwrap();
-    let entry_point = module.find_entry_point_by_name("main");
 
-    let entry_point = if let Some(entry_point) = entry_point {
-        entry_point
-    } else {
+    if module.entry_point_count() == 0 {
         return;
-    };
+    }
 
-    let program = if let Some(entry_point2) = module.find_entry_point_by_name("update") {
-        session
-            .create_composite_component_type(&[
-                module.downcast().clone(),
-                entry_point.downcast().clone(),
-                entry_point2.downcast().clone()
-            ])
-            .unwrap()
-    } else {
-        session
-            .create_composite_component_type(&[
-                module.downcast().clone(),
-                entry_point.downcast().clone(),
-            ])
-            .unwrap()
-    };
+    let mut component_types = Vec::<slang::ComponentType>::new();
+    component_types.push(module.downcast().clone());
+    for entry_point in module.entry_points() {
+        component_types.push(entry_point.downcast().clone());
+    }
 
+    let program = session.create_composite_component_type(&component_types).unwrap();
     let linked_program = program.link().unwrap();
+
+    // ERROR: for some reason `target_code` does not return Err, even when there is no valid target code
+    // it just gives an undefined blob. program crashes when you try to `as_slice` it.
+    // TODO: report as issue?
     let shader_bytecode = linked_program.target_code(0).unwrap();
     let raw = shader_bytecode.as_slice();
     let length = raw.len();
@@ -51,19 +42,19 @@ fn load_module(session: &mut slang::Session, file_name: &str) {
     println!("cargo:warning=Compiled! {length} bytes, saved to {path_str}");
 }
 
+// TODO: optimize. this will re-compile all shaders, even if only one of them was modified
 fn main() {
     println!("cargo:rerun-if-changed=shaders");
     let global_session = slang::GlobalSession::new().unwrap();
     let search_path = std::ffi::CString::new("shaders").unwrap();
 
-    // All compiler options are available through this builder.
     let session_options = slang::CompilerOptions::default()
-        //.optimization(slang::OptimizationLevel::High)
+        .optimization(slang::OptimizationLevel::Default)
         .vulkan_use_entry_point_name(true)
         .matrix_layout_row(true);
 
+    
     let target_desc = slang::TargetDesc::default().format(slang::CompileTarget::Spirv);
-
     let targets = [target_desc];
     let search_paths = [search_path.as_ptr()];
 
@@ -78,11 +69,9 @@ fn main() {
     dir_path.push("shaders");
     let dir = std::fs::read_dir(dir_path).unwrap();
 
-    for x in dir {
-        if let Ok(entry) = x {
-            let file_name = entry.file_name().into_string().unwrap();
-            let file_name = file_name.split(".").next().unwrap();
-            load_module(&mut session, file_name);
-        }
+    for entry in dir.filter_map(|x| x.ok()) {
+        let file_name = entry.file_name().into_string().unwrap();
+        let file_name = file_name.split(".").next().unwrap();
+        load_module(&mut session, file_name);
     }
 }

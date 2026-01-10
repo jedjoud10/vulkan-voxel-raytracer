@@ -51,18 +51,18 @@ uint calculate_enabled_faces(uint3 id) {
     return enabled_faces;
 }
 
-static const uint SHADOW_SAMPLES_PER_TICK = 32;
-static const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
-static const bool SHADOW_TEMPORAL = false;
-static const bool SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR = true;
-static const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR = 5.0;
-static const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN = 0.4;
-static const float SHADOW_ANGLE_SPREAD_FACTOR = 0.02;
+[SpecializationConstant] const uint SHADOW_SAMPLES_PER_TICK = 4;
+[SpecializationConstant] const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
+[SpecializationConstant] const bool SHADOW_TEMPORAL = false;
+[SpecializationConstant] const bool SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR = true;
+[SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR = 5.0;
+[SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN = 0.4;
+[SpecializationConstant] const bool SHADOW_USE_RANDOM_ANGLE_SPREAD = false;
+[SpecializationConstant] const float SHADOW_RANDOM_ANGLE_SPREAD_FACTOR = 0.02;
 
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
-    return;
     
     // this basically moves the block down if the block underneath it is empty air
     // this simulates gravity
@@ -161,12 +161,14 @@ void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float
                         // ts so slow twin...
                         // ts pmo... ong...
                         float3 shadow_color = 0.0;
-                        for (int s = 0; s < SHADOW_SAMPLES_PER_TICK; s++) {
+                        float spread = SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_RANDOM_ANGLE_SPREAD_FACTOR : 0; 
+                        for (int s = 0; s < (SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_SAMPLES_PER_TICK : 1); s++) {
                             // jarvis... randominate this shit...
-                            float3 sun_sample = normalize(sun.xyz + (hash33(s * 2432.43243 - (id + unflattened / 3.0) * 232.342 + tick * 43.23) - 0.5) * SHADOW_ANGLE_SPREAD_FACTOR);
+                            float3 sun_sample = normalize(sun.xyz + (hash33(s * 2432.43243 - (id + unflattened / 3.0) * 232.342 + tick * 43.23) - 0.5) * spread);
                             float3 world_pos = id + 0.125 + offsets[i] * 0.15 + unflattened / 4.0 + sun_sample * 0.15;
                             shadow_color += dda_shadownate(voxels, sun_sample, world_pos);
                         }
+
 
                         uint8_t4 old = data.colors[p];
                         float3 a = old.xyz / 255.0;

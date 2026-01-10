@@ -15,6 +15,8 @@
 - Ticking logic system, separate from frame-based logic. Allows us to run the ``update`` compute shader periodically instead of every frame.
 
 ## TODO
+- Implement multiple chunk rendering
+    - *Tip For Shadows*: At far enough distances, the per-voxel face texels will occupy less than one pixel on the screen. This means that it would be cheaper to do shadows for *each pixel*, instead of for *each voxel face texel*. 
 - Implement *octree* / *BHV* as a basic acceleration structure.
     - I have tried before to implement *octrees* with DDA and have failed. Maybe this time it will work
 - Experiment with dedicated Raytracing extensions. Maybe we could speed things up by using RT acceleration structures / queries?

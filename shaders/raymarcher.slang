@@ -1,4 +1,5 @@
 #include <lighting.slang>
+#include <pbr.slang>
 
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> output;
@@ -11,6 +12,8 @@ RWStructuredBuffer<SurfaceData> surface_data_buffer;
 
 [[vk::binding(3, 0)]]
 RWTexture3D<uint> voxels_indices;
+
+[SpecializationConstant] const bool USE_PIXELATED_SHADOWS = true;
 
 [shader("compute")]
 [numthreads(32, 32, 1)]
@@ -72,6 +75,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                 ray_pos = world;
                 tint *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
             } else {
+                uint3 block_pos = (uint3)floored_pos;
                 hit = true;
 
                 // if face = 0, enabled faces = 100111, target face is the 1st bit from the right, packed index = 0
@@ -95,39 +99,69 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
                 // adds 2 padding bits to the right at the start
                 // IT WORKS!!!
-                uint funny_index_magic = voxels_indices[(uint3)floored_pos];
+                uint funny_index_magic = voxels_indices[block_pos];
 
                 float3 shadow = 0.0;
-                uint tmp = 0;
-                shadow = dda_shadownate(voxels, sun.xyz, world + sun.xyz * 0.01);
-                /*
-                uint funny_index = funny_index_magic & ~(0b111111 << (32 - 6));
-                if (funny_index != INVALID) {
-                    uint enabled_faces = (funny_index_magic >> (32 - 6)) & 0b111111;
-                    uint face2 = global_face(face, dir_sign);
 
-                    enabled_faces = (enabled_faces << (6 - face2)) & 0b111111;
-                    int packed_face_index = countbits(enabled_faces);
+                if (USE_PIXELATED_SHADOWS) {
+                    uint funny_index = funny_index_magic & ~(0b111111 << (32 - 6));
+                    if (funny_index != INVALID) {
+                        uint enabled_faces = (funny_index_magic >> (32 - 6)) & 0b111111;
+                        uint face2 = global_face(face, dir_sign);
 
-                    SurfaceData surface_data = surface_data_buffer[funny_index + packed_face_index];
+                        enabled_faces = (enabled_faces << (6 - face2)) & 0b111111;
+                        int packed_face_index = countbits(enabled_faces);
 
-                    float2 flat = flatten_uvs(face, dir_sign, uv);
-                    uint2 pixels = (uint2)(floor(flat * 4 - 0.002));
-                    uint converted_to_flat_index = pixels.x + pixels.y * 4;
-                    shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
+                        SurfaceData surface_data = surface_data_buffer[funny_index + packed_face_index];
+
+                        float2 flat = flatten_uvs(face, dir_sign, uv);
+                        uint2 pixels = (uint2)(floor(flat * 4 - 0.002));
+                        uint converted_to_flat_index = pixels.x + pixels.y * 4;
+                        shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
+                    }
+                } else {
+                    shadow = dda_shadownate(voxels, sun.xyz, world + sun.xyz * 0.01);
                 }
-                */
                 
                 ao_solver solver;
                 solver.fetcher = fetcher;
-                solver.pos = (uint3)floored_pos;
+                solver.pos = block_pos;
                 solver.uv = floor(uv * 8) / 7;
                 solver.face = face;
                 solver.sign = dir_sign;
                 float ao = solver.ao();
+                ao = ao * 0.4f + 0.6;
 
                 //color = (float)i / 128;
-                color = light(sun.xyz, fetcher, (uint3)floored_pos, world, ray_dir, uv, normal, ao, shadow);
+
+                uint3 pixels = (uint3)(floor(uv * 8 + 0.001));
+
+                if (hash13(block_pos) > 0.5) {
+                    pixels.x = 7 - pixels.x;
+                }
+            
+                if (hash13(block_pos + 12.12321) > 0.5) {
+                    pixels.z = 7 - pixels.z;
+                }
+            
+                normal = normalize(normal + (hash33(pixels * float3(4.5984, 43.2323, -0.1212)) - 0.5) * 0.05);
+                float mixer = hash13(pixels * float3(123.321, 21.322, -32.321)) * 0.2 + 0.8;
+            
+                //float3 grass = 1;
+                //float3 dirt = 0.2;
+                float3 grass = float3(33, 60, 30) / 255;
+                float3 dirt = float3(58, 33, 22) / 255;
+
+                bool top_face = normal.y > 0.5;
+                bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
+                float3 diffuse = (top_pixels ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
+                
+                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.2, 0.0, ao, shadow);
+                CameraData camera_data = CameraData(-ray_dir);
+                SunData sun_data = SunData(sun.xyz, 3);
+                color = brdf(pbr_surface_data, camera_data, sun_data);
+                //color = pixels / 8.0;
+                //color = light(sun.xyz, fetcher, (uint3)floored_pos, world, ray_dir, uv, normal, ao, shadow);
                 break;
             }
         }
@@ -145,6 +179,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
     color *= tint;
 
+    //color = pow(color, 1 / 2.2);
     color = clamp(pow(aces(color * 1.3), 1 / 2.2), 0, 1);
     output[id.xy] = float4(color, 0);
 }

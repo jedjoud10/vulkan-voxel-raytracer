@@ -19,3 +19,6 @@ cfg-if = "1.0.0"
 
 [build-dependencies]
 slang = { git = "https://github.com/FloatyMonkey/slang-rs.git" }
+
+[profile.dev.build-override]
+debug = true
