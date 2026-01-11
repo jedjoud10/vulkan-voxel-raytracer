@@ -6,6 +6,9 @@
 
 
 ## Features
+- PBR rendering (code copied from cflake engine and adapted to Slang)
+- Realistic Sky Rendering using `SkyTheDragon`'s [sky atmo](https://www.shadertoy.com/view/t3XBWH) and `TheNuclearWolf`'s [fast-sky](https://www.shadertoy.com/view/lcGfDK
+)
 - World stored as a single 3D texture containing voxels.
 - Naive 3D voxel ray-tracing using DDA and compute shaders 
 - Custom "UV Unwrapping" by creating surfaces and unwrapping them.

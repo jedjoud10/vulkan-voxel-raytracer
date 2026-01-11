@@ -13,21 +13,6 @@ RWTexture3D<uint> voxel_indices;
 [[vk::binding(3, 0)]]
 RWStructuredBuffer<Atomic<uint>> counter;
 
-
-[shader("compute")]
-[numthreads(8, 8, 8)]
-void main(uint3 id: SV_DispatchThreadID) {
-    int noisy = (int)(noise((float2)id.xz * 0.1) * 10);
-    int base = id.y - 15;
-    base += noisy * 0.5;
-
-    Voxel voxel;
-    voxel.active = base < 0;
-    voxel.reflective = false;
-    voxel.refractive = false;
-    voxels[id] = voxel.into_raw();
-}
-
 static const int3[] offsets = {
     int3(1, 0, 0),
     int3(-1, 0, 0),
@@ -53,7 +38,7 @@ uint calculate_enabled_faces(uint3 id) {
 
 [SpecializationConstant] const uint SHADOW_SAMPLES_PER_TICK = 4;
 [SpecializationConstant] const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
-[SpecializationConstant] const bool SHADOW_TEMPORAL = false;
+[SpecializationConstant] const bool SHADOW_TEMPORAL = true;
 [SpecializationConstant] const bool SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR = true;
 [SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR = 5.0;
 [SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN = 0.4;
@@ -62,12 +47,45 @@ uint calculate_enabled_faces(uint3 id) {
 
 [shader("compute")]
 [numthreads(8, 8, 8)]
-void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
+void unwrap(uint3 id: SV_DispatchThreadID) {
+    // skip if the block is empty
+    if ((voxels[id] & 1) == 0) {
+        voxel_indices[id] = INVALID;
+        return;
+    }
+
+
+    // this calculates the surface texels for each valid voxel
+    // it checks the 6 nearby voxels and creates a surface if they are empty / refractive
+    uint enabled_faces = calculate_enabled_faces(id);
+
+    if (enabled_faces > 0) {
+        uint prev_packed_index = voxel_indices[id];
+        uint prev_block_index = prev_packed_index & ~(111111 << 26);
+        uint num_enabled_faces = countbits(enabled_faces);
+
+        uint block_index = counter[0].add(num_enabled_faces, MemoryOrder.Relaxed);
+        uint packed_index = block_index | enabled_faces << (32 - 6);
+        voxel_indices[id] = packed_index;
+
+        for (int i = 0; i < num_enabled_faces; i++) {
+            SurfaceData data = surface_data_buffer[prev_block_index + i];
+            surface_data_buffer[block_index + i] = data;
+        }
+    } else {
+        // the voxel does not have any valid faces, we can hide it away
+        voxel_indices[id] = INVALID;
+    }
+}
+
+[shader("compute")]
+[numthreads(8, 8, 8)]
+void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
     
     // this basically moves the block down if the block underneath it is empty air
     // this simulates gravity
     /*
-    if ((voxels[id - uint3(0, 1, 0)] & 1) == 0 && (voxels[id] & 1) == 1 && id.y > 0 && (tick % 128) == 0) {
+    if ((voxels[id - uint3(0, 1, 0)] & 1) == 0 && (voxels[id] & 1) == 1 && id.y > 0 && (tick % 16) == 0) {
         voxels[id - uint3(0, 1, 0)] = voxels[id];
         voxels[id] = 0;
         return;
@@ -86,18 +104,9 @@ void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float
 
     // this calculates the surface texels for each valid voxel
     // it checks the 6 nearby voxels and creates a surface if they are empty / refractive
-    if (tick == 0) {
+
+    if ((tick % 32) == 0) {
         uint enabled_faces = calculate_enabled_faces(id);
-
-        /*
-        AllMemoryBarrier();
-
-        if (counter[0].load(MemoryOrder.Relaxed) > 0) {
-            counter[0];
-        }
-
-        AllMemoryBarrier();
-        */
 
         if (enabled_faces > 0) {
             uint prev_packed_index = voxel_indices[id];
@@ -110,6 +119,8 @@ void update(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float
 
             for (int i = 0; i < countbits(enabled_faces); i++) {
                 SurfaceData data = surface_data_buffer[prev_block_index + i];
+
+                AllMemoryBarrier();
                 surface_data_buffer[block_index + i] = data;
             }
         } else {

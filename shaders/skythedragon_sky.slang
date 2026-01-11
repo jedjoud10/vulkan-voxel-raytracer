@@ -1,5 +1,5 @@
-#ifndef SKY
-#define SKY
+#ifndef SKYTHEDRAGON_SKY
+#define SKYTHEDRAGON_SKY
 #include <hash.slang>
 
 // author: SkyTheDragon
@@ -162,25 +162,6 @@ float3 scatter(float3 ray, float3 dir, float3 light, float depth) {
         attn * (opt_view_start - opt_view_end).x * ray_scattering * phase_ray(cos_gamma) + 
         attn * (opt_view_start - opt_view_end).y * mie_scattering * phase_mie(cos_gamma)
     );
-}
-
-float3 sky(float3 sun_dir, float3 ray_dir, bool extraLightEnabled = true) {
-    float3 ray_start = cam_pos + float3(0, bottom_radius, 0);
-    float2 planet = planet_bounds(ray_start, ray_dir);
-
-    float3 res = scatter(ray_start, ray_dir, normalize(sun_dir), planet.x) * 4;
-
-    if (extraLightEnabled) {
-        float dayTime = 1;
-        float sunSpot = max(dot(ray_dir, sun_dir), 0.0);
-        float sunMask = pow(sunSpot, 64.0) * dayTime;
-        float sun = max(0.0, smoothstep(0.5, 1.5, dot(ray_dir, sun_dir))) * 0.5;
-        float sunDisc = smoothstep(0.9999, 0.999935, dot(ray_dir, sun_dir));
-
-        res += sunDisc;
-    }
-
-    return res;
 }
 
 #endif

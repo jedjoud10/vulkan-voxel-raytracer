@@ -109,7 +109,7 @@ float3 dda_shadownate(
 }
 
 
-float3 normal(int face, float3 sign) {
+float3 get_face_normal(int face, float3 sign) {
     return -(float3)(face == int3(0, 1, 2)) * sign;
 }
 

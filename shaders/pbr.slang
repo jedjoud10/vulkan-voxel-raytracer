@@ -95,20 +95,20 @@ public float3 brdf(
 	float3 specular = specular(f0, surface.roughness, camera.view, light.direction, surface.normal, half_view);
 	float3 brdf = kd * (surface.diffuse) + specular + fresnel(f0, half_view, camera.view);
 	float3 lighting = float3(max(dot(light.direction, surface.normal), 0.0)) * surface.shadows;
-	brdf *= lighting * 3.0;
-	//brdf *= lighting * light.color;
+	brdf *= lighting * light.color;
 
 	// Diffuse Irradiance IBL
 	// TODO: can we use Slang auto-diff to compute the irradiance and specular IBL in a smarter way?
     //float3 irradiance = sky(light.direction, surface.normal, true);
 
 	float3 skyColor = sky(light.direction, float3(0, 0.8, 0), false);
-	float3 groundColor = sky(light.direction, float3(0, 0.2, 0), false);
+	float3 groundColor = sky(light.direction, float3(0, 0.05, 0), false);
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
 	float3 ambient = irradiance * surface.diffuse * kd * surface.visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
+	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
 	return brdf + ambient * 0.8;
 	//return specular;
 	//return ambient * 0.5;

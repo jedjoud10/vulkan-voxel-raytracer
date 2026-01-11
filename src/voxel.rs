@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 
-use crate::pipeline::PushConstants2;
+use crate::pipeline::{ComputePipeline, PushConstants2};
 
 pub const SIZE: u32 = 64;
 pub const _SIZE: usize = SIZE as usize;
@@ -163,9 +163,7 @@ pub unsafe fn generate_voxel_image(
     voxel_image_view: vk::ImageView,
     voxel_indices_image: vk::Image,
     voxel_indices_image_view: vk::ImageView,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+    voxel_generate_pipeline: &ComputePipeline,
 ) {
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
@@ -213,7 +211,7 @@ pub unsafe fn generate_voxel_image(
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
 
-    let layouts = [descriptor_set_layout];
+    let layouts = [voxel_generate_pipeline.descriptor_set_layout];
     let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&layouts);
@@ -241,7 +239,7 @@ pub unsafe fn generate_voxel_image(
     device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
+        voxel_generate_pipeline.pipeline_layout,
         0,
         &descriptor_sets,
         &[],
@@ -250,7 +248,7 @@ pub unsafe fn generate_voxel_image(
     device.cmd_bind_pipeline(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        pipeline,
+        voxel_generate_pipeline.pipeline,
     );
 
     device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
@@ -289,7 +287,7 @@ pub unsafe fn generate_voxel_image(
 }
 
 
-pub unsafe fn update_voxel_thingies(
+pub unsafe fn execute_voxel_tick_compute(
     device: &ash::Device,
     cmd: vk::CommandBuffer,
     descriptor_pool: vk::DescriptorPool,
@@ -300,9 +298,7 @@ pub unsafe fn update_voxel_thingies(
     voxel_image_view: vk::ImageView,
     voxel_indices_image: vk::Image,
     voxel_indices_image_view: vk::ImageView,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    pipeline_layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+    tick_voxel_compute_pipeline: &ComputePipeline,
     push_constants: PushConstants2,
 ) -> vk::DescriptorSet {
 
@@ -361,7 +357,7 @@ pub unsafe fn update_voxel_thingies(
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
 
-    let layouts = [descriptor_set_layout];
+    let layouts = [tick_voxel_compute_pipeline.descriptor_set_layout];
     let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&layouts);
@@ -428,7 +424,7 @@ pub unsafe fn update_voxel_thingies(
     device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        pipeline_layout,
+        tick_voxel_compute_pipeline.pipeline_layout,
         0,
         &descriptor_sets,
         &[],
@@ -437,7 +433,7 @@ pub unsafe fn update_voxel_thingies(
     device.cmd_bind_pipeline(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        pipeline,
+        tick_voxel_compute_pipeline.pipeline,
     );
 
     let data = [0u32];
@@ -455,7 +451,7 @@ pub unsafe fn update_voxel_thingies(
     device.cmd_pipeline_barrier2(cmd, &dep);
 
     let raw = bytemuck::bytes_of(&push_constants);
-    device.cmd_push_constants(cmd, pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
+    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
     
     device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
 

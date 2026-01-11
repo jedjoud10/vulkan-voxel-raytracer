@@ -49,7 +49,10 @@ fn main() {
     let search_path = std::ffi::CString::new("shaders").unwrap();
 
     let session_options = slang::CompilerOptions::default()
-        .optimization(slang::OptimizationLevel::Default)
+        .optimization(slang::OptimizationLevel::None)
+        .debug_information(slang::DebugInfoLevel::Maximal)
+        .obfuscate(false)
+        .no_mangle(true)
         .vulkan_use_entry_point_name(true)
         .matrix_layout_row(true);
 

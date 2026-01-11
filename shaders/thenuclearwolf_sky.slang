@@ -1,5 +1,5 @@
-#ifndef SKY
-#define SKY
+#ifndef THENUCLEARWOLF_SKY
+#define THENUCLEARWOLF_SKY
 #include <hash.slang>
 
 
@@ -20,7 +20,7 @@ float stars(float3 rd) {
     return stars * rd.y;
 }
 
-float3 sky(float3 sunDir, float3 rd, bool extraLightEnabled = true) {
+float3 sky_color(float3 sunDir, float3 rd, bool extraLightEnabled = true) {
     float sunHeight = sunDir.y;
     float dayTime = smoothstep(-0.1, 0.1, sunHeight);
     float duskDawn = smoothstep(-0.3, 0.3, sunHeight) * (1.0 - dayTime);
