@@ -16,6 +16,7 @@ mod surface;
 mod swapchain;
 mod voxel;
 mod ticker;
+mod buffer;
 
 use ash;
 use ash::vk;
@@ -34,11 +35,11 @@ use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
+use crate::buffer::{Buffer, create_counter_buffer, create_buffer};
 use crate::pipeline::ComputePipeline;
 use crate::pipeline::MultiComputePipeline;
 use crate::pipeline::VoxelTickPipeline;
 use crate::voxel::_SIZE;
-use crate::voxel::Buffer;
 
 struct InternalApp {
     input: Input,
@@ -212,13 +213,13 @@ impl InternalApp {
 
         let descriptor_pool = pool::create_descriptor_pool(&device);
 
-        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device);
+        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker);
         log::info!("created render compute pipeline");
 
-        let generate_voxel_compute_pipeline = pipeline::create_generate_voxel_compute_pipeline(&*assets["voxel_generate.spv"], &device);
+        let generate_voxel_compute_pipeline = pipeline::create_generate_voxel_compute_pipeline(&*assets["voxel_generate.spv"], &device, &debug_marker);
         log::info!("created voxel generate compute pipeline");
 
-        let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device);
+        let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device, &debug_marker);
         log::info!("created voxel tick compute pipeline");
 
         let voxel_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, c"voxel image");
@@ -227,11 +228,11 @@ impl InternalApp {
         const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
         const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
 
-        let voxel_surface_buffer = voxel::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
-        let voxel_surface_counter_buffer = voxel::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_buffer = voxel::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
-        let visible_surface_counter_buffer = voxel::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_indirect_dispatch_buffer = voxel::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDIRECT_BUFFER);
+        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
+        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
+        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDIRECT_BUFFER);
 
 
         voxel::generate_voxel_image(
@@ -300,8 +301,8 @@ impl InternalApp {
             self.voxel_image.0,
             voxel::Voxel {
                 active: true,
-                reflective: false,
-                refractive: false,
+                reflective: self.ticker.count % 4 == 0,
+                refractive: self.ticker.count % 4 == 1,
                 placed: true,
             }.into_raw(),
             position,
@@ -810,8 +811,8 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                let left = inner.input.get_button(Button::Mouse(MouseButton::Left)).held();
-                let right = inner.input.get_button(Button::Mouse(MouseButton::Right)).held();
+                let left = inner.input.get_button(Button::Mouse(MouseButton::Left)).pressed();
+                let right = inner.input.get_button(Button::Mouse(MouseButton::Right)).pressed();
 
                 if left || right {
                     inner.click(left);

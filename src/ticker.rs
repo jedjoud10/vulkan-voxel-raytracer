@@ -1,4 +1,4 @@
-pub const TICKS_PER_SECOND: f32 = 60f32;
+pub const TICKS_PER_SECOND: f32 = 90f32;
 
 pub struct Ticker {
     pub accumulator: f32,

@@ -2,7 +2,7 @@
 #define OTHER
 #include <hash.slang>
 
-static const int SIZE = 64;
+static const int SIZE = 256;
 static const uint INVALID = 0x3FFFFFF;
 
 struct Voxel {

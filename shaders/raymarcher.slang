@@ -14,7 +14,8 @@ RWStructuredBuffer<SurfaceData> surface_data_buffer;
 RWTexture3D<uint> voxels_indices;
 
 [SpecializationConstant] const bool USE_PIXELATED_SHADOWS = true;
-[SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = true;
+[SpecializationConstant] const bool USE_ROUND_NORMALS = false;
+[SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = false;
 
 [shader("compute")]
 [numthreads(32, 32, 1)]
@@ -46,7 +47,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 block_uvs;
     uint3 block_pos;
 
-    for (int i = 0; i < SIZE; i++) {
+    for (int i = 0; i < SIZE*2; i++) {
         Voxel voxel = fetcher.fetch((int3)floored_pos);
 
         if (voxel.active) {
@@ -60,7 +61,12 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
             float max = max3(test.x, test.y, test.z);
             world = ray_pos + ray_dir * max;
             block_uvs = world - floored_pos;
-            normal = get_face_normal(face, dir_sign);
+
+            if (USE_ROUND_NORMALS) {
+                normal = normalize(block_uvs * 2 - 1);
+            } else {
+                normal = get_face_normal(face, dir_sign);
+            }
             block_pos = (uint3)floored_pos;
 
             if (voxel.refractive || voxel.reflective) {
@@ -176,11 +182,11 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
         float3 diffuse = (top_pixels ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
         
-        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow);
+        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.25, 0.0, ao, shadow);
         CameraData camera_data = CameraData(-ray_dir);
         SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 3 : 0);
-        color = brdf(pbr_surface_data, camera_data, sun_data);
-        //color = shadow;
+        //color = brdf(pbr_surface_data, camera_data, sun_data);
+        color = block_pos;
     } else {
         color = sky(sun.xyz, ray_dir);
     }

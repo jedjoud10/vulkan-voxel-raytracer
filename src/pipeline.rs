@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+use std::{ffi::{CStr, CString}, str::FromStr};
 
 use ash::vk;
 use bytemuck::{Pod, Zeroable};
@@ -67,13 +67,18 @@ pub type VoxelTickPipeline = MultiComputePipeline<4>;
 pub unsafe fn create_render_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
 ) -> ComputePipeline {
     let render_compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)
         .flags(vk::ShaderModuleCreateFlags::empty());
+
     let render_compute_shader_module = device
         .create_shader_module(&render_compute_shader_module_create_info, None)
         .unwrap();
+
+    crate::debug::set_object_name(render_compute_shader_module, binder, "render compute shader module");
+
 
     let render_compute_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
         .flags(vk::PipelineShaderStageCreateFlags::empty())
@@ -115,6 +120,9 @@ pub unsafe fn create_render_compute_pipeline(
     let render_compute_descriptor_set_layout = device
         .create_descriptor_set_layout(&render_descriptor_set_layout_create_info, None)
         .unwrap();
+
+    crate::debug::set_object_name(render_compute_descriptor_set_layout, binder, "render compute descriptor set layout");
+
     let render_compute_descriptor_set_layouts = [render_compute_descriptor_set_layout];
 
     let render_push_constant_range = vk::PushConstantRange::default()
@@ -132,6 +140,8 @@ pub unsafe fn create_render_compute_pipeline(
         .create_pipeline_layout(&render_compute_pipeline_layout_create_info, None)
         .unwrap();
 
+    crate::debug::set_object_name(render_compute_pipeline_layout, binder, "render compute pipeline layout");
+
     let render_compute_pipeline_create_info = vk::ComputePipelineCreateInfo::default()
         .layout(render_compute_pipeline_layout)
         .stage(render_compute_stage_create_info);
@@ -143,7 +153,8 @@ pub unsafe fn create_render_compute_pipeline(
         )
         .unwrap();
     let render_compute_pipeline = render_compute_pipelines[0];
-    
+    crate::debug::set_object_name(render_compute_pipeline, binder, "render compute pipeline");
+
     return ComputePipeline {
         module: render_compute_shader_module,
         descriptor_set_layout: render_compute_descriptor_set_layout,
@@ -155,6 +166,7 @@ pub unsafe fn create_render_compute_pipeline(
 pub unsafe fn create_tick_voxel_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
 ) -> VoxelTickPipeline {
     let compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)
@@ -162,6 +174,8 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
     let compute_shader_module = device
         .create_shader_module(&compute_shader_module_create_info, None)
         .unwrap();
+    crate::debug::set_object_name(compute_shader_module, binder, "tick voxel compute shader module");
+
 
     let descriptor_set_layout_binding_voxel_image = vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -217,10 +231,12 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
         .create_descriptor_set_layout(&descriptor_set_test_layout_create_info, None)
         .unwrap();
 
-    let unwrap_entry_point = create_single_entry_point_pipeline(device, compute_shader_module, c"unwrap", compute_descriptor_test_set_layout);
-    let unpack_entry_point = create_single_entry_point_pipeline(device, compute_shader_module, c"unpack", compute_descriptor_test_set_layout);
-    let tick_entry_point = create_single_entry_point_pipeline(device, compute_shader_module, c"main", compute_descriptor_test_set_layout);
-    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, compute_shader_module, c"copyDispatchSize", compute_descriptor_test_set_layout);
+    crate::debug::set_object_name(compute_descriptor_test_set_layout, binder, "tick voxel compute descriptor set layout");
+
+    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unwrap", compute_descriptor_test_set_layout);
+    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unpack", compute_descriptor_test_set_layout);
+    let tick_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout);
+    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "copyDispatchSize", compute_descriptor_test_set_layout);
     
     return MultiComputePipeline {
         module: compute_shader_module,
@@ -230,10 +246,12 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
 }
 
 
-unsafe fn create_single_entry_point_pipeline(device: &ash::Device, compute_shader_module: vk::ShaderModule, entry_point_name: &CStr, descriptor_set_layout: vk::DescriptorSetLayout) -> SingleEntryPointWrapper {
+unsafe fn create_single_entry_point_pipeline(device: &ash::Device, binder: &Option<ash::ext::debug_utils::Device>, compute_shader_module: vk::ShaderModule, entry_point_name: &str, descriptor_set_layout: vk::DescriptorSetLayout) -> SingleEntryPointWrapper {
+    let string = CString::from_str(entry_point_name).unwrap();
+
     let compute_test_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
         .flags(vk::PipelineShaderStageCreateFlags::empty())
-        .name(entry_point_name)
+        .name(string.as_c_str())
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(compute_shader_module);
     
@@ -250,12 +268,14 @@ unsafe fn create_single_entry_point_pipeline(device: &ash::Device, compute_shade
         .flags(vk::PipelineLayoutCreateFlags::empty())
         .set_layouts(&compute_descriptor_test_set_layouts);
     
-    let compute_pipeline_test_layout = device
+    let compute_pipeline_layout = device
         .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
         .unwrap();
+
+    crate::debug::set_object_name(compute_pipeline_layout, binder, format!("entry point '{entry_point_name}' compute pipeline layout"));
     
     let compute_pipeline_test_create_info = vk::ComputePipelineCreateInfo::default()
-        .layout(compute_pipeline_test_layout)
+        .layout(compute_pipeline_layout)
         .stage(compute_test_stage_create_info);
 
     let compute_pipelines = device
@@ -266,13 +286,16 @@ unsafe fn create_single_entry_point_pipeline(device: &ash::Device, compute_shade
         )
         .unwrap();
     
-    return SingleEntryPointWrapper { pipeline_layout: compute_pipeline_test_layout, pipeline: compute_pipelines[0] }
+    crate::debug::set_object_name(compute_pipelines[0], binder, format!("entry point '{entry_point_name}' compute pipeline"));
+
+    return SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
 }
 
 
 pub unsafe fn create_generate_voxel_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
 ) -> ComputePipeline {
     let compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)

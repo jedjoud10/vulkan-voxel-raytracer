@@ -137,7 +137,7 @@ void unpack(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void copyDispatchSize(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
+void copyDispatchSize(uint3 id: SV_DispatchThreadID) {
     indirect_dispatch_size[0] = uint32_t3(visible_surfaces_counter[0].load(MemoryOrder.Relaxed) / 64 + 1, 1, 1);
 }
 

@@ -5,7 +5,7 @@ use gpu_allocator::vulkan::{Allocation, Allocator};
 
 use crate::pipeline::{ComputePipeline, PushConstants2, VoxelTickPipeline};
 
-pub const SIZE: u32 = 64;
+pub const SIZE: u32 = 256;
 pub const _SIZE: usize = SIZE as usize;
 
 pub unsafe fn create_voxel_image(
@@ -72,72 +72,6 @@ pub unsafe fn create_voxel_image(
     }
     
     (voxel_image, allocation, voxel_image_view)
-}
-
-pub struct Buffer {
-    pub buffer: vk::Buffer,
-    pub allocation: Allocation,
-}
-
-impl Buffer {
-    pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
-        device.destroy_buffer(self.buffer, None);
-        allocator.free(self.allocation).unwrap();
-    }
-}
-
-pub unsafe fn create_buffer(
-    device: &ash::Device,
-    allocator: &mut Allocator,
-    size: usize,
-    binder: &Option<ash::ext::debug_utils::Device>,
-    name: &str,
-    usage: vk::BufferUsageFlags,
-) -> Buffer {
-    let buffer_create_info = vk::BufferCreateInfo::default()
-        .flags(vk::BufferCreateFlags::empty())
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .size(size as u64);
-    let buffer = device.create_buffer(&buffer_create_info, None).unwrap();
-
-    let requirements = device.get_buffer_memory_requirements(buffer);
-
-    let allocation = allocator
-        .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-            name: &format!("{name} allocation"),
-            requirements: requirements,
-            linear: true,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(buffer),
-            location: gpu_allocator::MemoryLocation::GpuOnly,
-        })
-        .unwrap();
-
-    let tmp = CString::from_str(name).unwrap();
-
-    if let Some(binder) = binder {
-        let marker = vk::DebugUtilsObjectNameInfoEXT::default()
-            .object_handle(buffer)
-            .object_name(tmp.as_c_str());
-        binder.set_debug_utils_object_name(&marker).unwrap();
-    }
-
-    
-    let device_memory = allocation.memory();
-    device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
-
-    Buffer {
-        buffer, allocation
-    }
-}
-
-pub unsafe fn create_counter_buffer(
-    device: &ash::Device,
-    allocator: &mut Allocator,
-    binder: &Option<ash::ext::debug_utils::Device>,
-    name: &str,
-) -> Buffer {
-    create_buffer(device, allocator, size_of::<u32>(), binder, name, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC)
 }
 
 pub unsafe fn generate_voxel_image(
@@ -476,8 +410,8 @@ pub unsafe fn execute_voxel_tick_compute(
     let barrier = vk::MemoryBarrier2::default()
         .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
         .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
-        .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
     let barriers = [barrier];
     let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
@@ -487,10 +421,6 @@ pub unsafe fn execute_voxel_tick_compute(
     
     device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
 
-
-
-
-
     device.cmd_bind_pipeline(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
@@ -498,10 +428,10 @@ pub unsafe fn execute_voxel_tick_compute(
     );
 
     let barrier = vk::MemoryBarrier2::default()
-        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .src_access_mask(vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::MEMORY_WRITE)
         .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
-        .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
     let barriers = [barrier];
     let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
@@ -523,14 +453,13 @@ pub unsafe fn execute_voxel_tick_compute(
     );
 
     let barrier = vk::MemoryBarrier2::default()
-        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .src_access_mask(vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::MEMORY_WRITE)
         .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
-        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
     let barriers = [barrier];
     let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
-    
 
     let raw = bytemuck::bytes_of(&push_constants);
     device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.entry_points[2].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);

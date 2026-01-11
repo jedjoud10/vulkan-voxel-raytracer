@@ -1,5 +1,5 @@
 use ash::vk::{self};
-use std::ffi::{c_void, CStr};
+use std::{ffi::{CStr, CString, c_void}, str::FromStr};
 
 #[cfg(debug_assertions)]
 pub unsafe fn create_debug_messenger_create_info() -> vk::DebugUtilsMessengerCreateInfoEXT<'static>
@@ -16,6 +16,17 @@ pub unsafe fn create_debug_messenger_create_info() -> vk::DebugUtilsMessengerCre
                 | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
         )
         .pfn_user_callback(Some(debug_callback))
+}
+
+pub unsafe fn set_object_name<T: ash::vk::Handle, S: AsRef<str>>(obj: T, binder: &Option<ash::ext::debug_utils::Device>, name: S) {
+    if let Some(binder) = binder {
+        let string = CString::from_str(name.as_ref()).unwrap();
+
+        let marker = vk::DebugUtilsObjectNameInfoEXT::default()
+            .object_handle(obj)
+            .object_name(string.as_c_str());
+        binder.set_debug_utils_object_name(&marker).unwrap();
+    }
 }
 
 pub unsafe fn create_debug_messenger(
@@ -120,3 +131,5 @@ pub unsafe extern "system" fn debug_callback(
 
     vk::FALSE
 }
+
+

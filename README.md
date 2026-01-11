@@ -30,7 +30,7 @@
     4. Fetch extra rays if there are any from the previous step. Add back to original buffer somehow (maybe double buffered?)
     5. Go back to 2. and re-execute until we run out of iterations or we run out of rays
 - This could allow for less noisy reflections without reverting to temporal accumulation / smoothing, but it would be **heaps order** more expensive.
-- Currently, the update shader exits immediately when we encounter a voxel with no valid surface, and it then starts multiple loops, where the outer one iterates over the 6 faces of each voxel. We could split this into two parts to improve performance
+- Currently, the update shader exits immediately when we encounter a voxel with no valid surface, and it then starts multiple loops, where the outer one iterates over the 6 faces of each voxel. We could split this into two parts to improve performance (IMPLEMENTED!!!! WORKS!!!)
     1. Have one compute shader create the visible cube-facets. Does no DDA computation by itself.
     2. Invoke another shader *indirectly* to do the expensive per-face computations for each face, where each invocation is a separate face.
 - This *should* improve performance since now we can use the threads more efficiently. Must profile first to see if my guess is correct (thread usage is low).
