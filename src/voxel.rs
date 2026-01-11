@@ -1,9 +1,9 @@
-use std::ffi::CStr;
+use std::{ffi::{CStr, CString}, str::FromStr};
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 
-use crate::pipeline::{ComputePipeline, PushConstants2};
+use crate::pipeline::{ComputePipeline, PushConstants2, VoxelTickPipeline};
 
 pub const SIZE: u32 = 64;
 pub const _SIZE: usize = SIZE as usize;
@@ -74,66 +74,38 @@ pub unsafe fn create_voxel_image(
     (voxel_image, allocation, voxel_image_view)
 }
 
-pub unsafe fn create_voxel_surface_buffer(
-    device: &ash::Device,
-    allocator: &mut Allocator,
-    binder: &Option<ash::ext::debug_utils::Device>,
-) -> (vk::Buffer, Allocation) {
-    // store semi-worst case scenario?
-    const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
-    let size = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
-
-
-    let voxel_buffer_create_info = vk::BufferCreateInfo::default()
-        .flags(vk::BufferCreateFlags::empty())
-        .usage(vk::BufferUsageFlags::STORAGE_BUFFER)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .size(size as u64);
-    let buffer = device.create_buffer(&voxel_buffer_create_info, None).unwrap();
-
-    let requirements = device.get_buffer_memory_requirements(buffer);
-
-    let allocation = allocator
-        .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-            name: "Voxel Surface Buffer Allocation",
-            requirements: requirements,
-            linear: true,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(buffer),
-            location: gpu_allocator::MemoryLocation::GpuOnly,
-        })
-        .unwrap();
-
-    if let Some(binder) = binder {
-        let marker = vk::DebugUtilsObjectNameInfoEXT::default()
-            .object_handle(buffer)
-            .object_name(c"voxel surface buffer");
-        binder.set_debug_utils_object_name(&marker).unwrap();
-    }
-
-    
-    let device_memory = allocation.memory();
-    device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
-    (buffer, allocation)
+pub struct Buffer {
+    pub buffer: vk::Buffer,
+    pub allocation: Allocation,
 }
 
+impl Buffer {
+    pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
+        device.destroy_buffer(self.buffer, None);
+        allocator.free(self.allocation).unwrap();
+    }
+}
 
-pub unsafe fn create_voxel_counter_buffer(
+pub unsafe fn create_buffer(
     device: &ash::Device,
     allocator: &mut Allocator,
+    size: usize,
     binder: &Option<ash::ext::debug_utils::Device>,
-) -> (vk::Buffer, Allocation) {
-    let voxel_buffer_create_info = vk::BufferCreateInfo::default()
+    name: &str,
+    usage: vk::BufferUsageFlags,
+) -> Buffer {
+    let buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
-        .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+        .usage(usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .size(size_of::<u32>() as u64);
-    let buffer = device.create_buffer(&voxel_buffer_create_info, None).unwrap();
+        .size(size as u64);
+    let buffer = device.create_buffer(&buffer_create_info, None).unwrap();
 
     let requirements = device.get_buffer_memory_requirements(buffer);
 
     let allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-            name: "Voxel Index Counter Allocation",
+            name: &format!("{name} allocation"),
             requirements: requirements,
             linear: true,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(buffer),
@@ -141,16 +113,31 @@ pub unsafe fn create_voxel_counter_buffer(
         })
         .unwrap();
 
+    let tmp = CString::from_str(name).unwrap();
+
     if let Some(binder) = binder {
         let marker = vk::DebugUtilsObjectNameInfoEXT::default()
             .object_handle(buffer)
-            .object_name(c"voxel index counter buffer");
+            .object_name(tmp.as_c_str());
         binder.set_debug_utils_object_name(&marker).unwrap();
     }
+
     
     let device_memory = allocation.memory();
     device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
-    (buffer, allocation)
+
+    Buffer {
+        buffer, allocation
+    }
+}
+
+pub unsafe fn create_counter_buffer(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    binder: &Option<ash::ext::debug_utils::Device>,
+    name: &str,
+) -> Buffer {
+    create_buffer(device, allocator, size_of::<u32>(), binder, name, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC)
 }
 
 pub unsafe fn generate_voxel_image(
@@ -294,11 +281,14 @@ pub unsafe fn execute_voxel_tick_compute(
     queue_family_index: u32,
     surface_buffer: vk::Buffer,
     counter_buffer: vk::Buffer,
+    visible_surface_buffer: vk::Buffer,
+    visible_surface_counter_buffer: vk::Buffer,
+    indirect_dispatch_buffer: vk::Buffer,
     voxel_image: vk::Image,
     voxel_image_view: vk::ImageView,
     voxel_indices_image: vk::Image,
     voxel_indices_image_view: vk::ImageView,
-    tick_voxel_compute_pipeline: &ComputePipeline,
+    tick_voxel_compute_pipeline: &VoxelTickPipeline,
     push_constants: PushConstants2,
 ) -> vk::DescriptorSet {
 
@@ -351,9 +341,29 @@ pub unsafe fn execute_voxel_tick_compute(
         .dst_queue_family_index(queue_family_index)
         .src_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
         .dst_access_mask(vk::AccessFlags2::SHADER_WRITE);
+    let voxel_visible_surfaces_buffer_read_to_write = vk::BufferMemoryBarrier2::default()
+        .buffer(visible_surface_buffer)
+        .size(u64::MAX)
+        .offset(0)
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_queue_family_index(queue_family_index)
+        .dst_queue_family_index(queue_family_index)
+        .src_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .dst_access_mask(vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ);
+    let voxel_visible_surfaces_counter_buffer_read_to_write = vk::BufferMemoryBarrier2::default()
+        .buffer(visible_surface_counter_buffer)
+        .size(u64::MAX)
+        .offset(0)
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_queue_family_index(queue_family_index)
+        .dst_queue_family_index(queue_family_index)
+        .src_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .dst_access_mask(vk::AccessFlags2::SHADER_WRITE);
 
     let image_memory_barriers = [voxel_image_read_to_write, voxel_indices_image_read_to_write];
-    let buffer_memory_barriers = [voxel_surface_buffer_read_to_write, voxel_counter_buffer_read_to_write];
+    let buffer_memory_barriers = [voxel_surface_buffer_read_to_write, voxel_counter_buffer_read_to_write, voxel_visible_surfaces_buffer_read_to_write, voxel_visible_surfaces_counter_buffer_read_to_write];
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
 
@@ -366,80 +376,79 @@ pub unsafe fn execute_voxel_tick_compute(
         .unwrap();
     let descriptor_set = descriptor_sets[0];
 
-    let descriptor_image_info = vk::DescriptorImageInfo::default()
+    let descriptor_voxel_image_view_info = vk::DescriptorImageInfo::default()
         .image_view(voxel_image_view)
         .image_layout(vk::ImageLayout::GENERAL)
         .sampler(vk::Sampler::null());
-    let descriptor_image_infos = [descriptor_image_info];
-
-    let descriptor_buffer_info = vk::DescriptorBufferInfo::default()
-        .buffer(surface_buffer)
-        .offset(0)
-        .range(u64::MAX);
-    let descriptor_buffer_infos = [descriptor_buffer_info];
-
-    let descriptor_index_image_info = vk::DescriptorImageInfo::default()
+    let descriptor_voxel_surface_index_image_view_info = vk::DescriptorImageInfo::default()
         .image_view(voxel_indices_image_view)
         .image_layout(vk::ImageLayout::GENERAL)
         .sampler(vk::Sampler::null());
-    let descriptor_index_image_infos = [descriptor_index_image_info];
 
-    let descriptor_buffer_counter_info = vk::DescriptorBufferInfo::default()
+    let descriptor_voxel_surface_buffer_info = vk::DescriptorBufferInfo::default()
+        .buffer(surface_buffer)
+        .offset(0)
+        .range(u64::MAX);
+    let descriptor_voxel_surface_counter_buffer_info = vk::DescriptorBufferInfo::default()
         .buffer(counter_buffer)
         .offset(0)
         .range(u64::MAX);
-    let descriptor_buffer_counter_infos = [descriptor_buffer_counter_info];
+    let descriptor_visible_surface_buffer_info = vk::DescriptorBufferInfo::default()
+        .buffer(visible_surface_buffer)
+        .offset(0)
+        .range(u64::MAX);
+    let descriptor_visible_surface_counter_buffer_info = vk::DescriptorBufferInfo::default()
+        .buffer(visible_surface_counter_buffer)
+        .offset(0)
+        .range(u64::MAX);
+    let indirect_dispatch_buffer_info = vk::DescriptorBufferInfo::default()
+        .buffer(indirect_dispatch_buffer)
+        .offset(0)
+        .range(u64::MAX);
 
-    let descriptor_write_1 = vk::WriteDescriptorSet::default()
-        .descriptor_count(1)
+    let descriptor_image_infos = [descriptor_voxel_image_view_info, descriptor_voxel_surface_index_image_view_info];
+    let descriptor_buffer_infos = [descriptor_voxel_surface_buffer_info, descriptor_voxel_surface_counter_buffer_info, descriptor_visible_surface_buffer_info, descriptor_visible_surface_counter_buffer_info, indirect_dispatch_buffer_info];
+
+    let image_descriptor_write = vk::WriteDescriptorSet::default()
+        .descriptor_count(descriptor_image_infos.len() as u32)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .dst_binding(0)
         .dst_set(descriptor_set)
         .image_info(&descriptor_image_infos);
 
-    let descriptor_write_2 = vk::WriteDescriptorSet::default()
-        .descriptor_count(1)
+    let buffer_descriptor_write = vk::WriteDescriptorSet::default()
+        .descriptor_count(descriptor_buffer_infos.len() as u32)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .dst_binding(1)
+        .dst_binding(2)
         .dst_set(descriptor_set)
         .buffer_info(&descriptor_buffer_infos);
 
-    let descriptor_write_3 = vk::WriteDescriptorSet::default()
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .dst_binding(2)
-        .dst_set(descriptor_set)
-        .image_info(&descriptor_index_image_infos);
-
-    let descriptor_write_4 = vk::WriteDescriptorSet::default()
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .dst_binding(3)
-        .dst_set(descriptor_set)
-        .buffer_info(&descriptor_buffer_counter_infos);
-
     device
-        .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4], &[]);
+        .update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write], &[]);
 
     device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        tick_voxel_compute_pipeline.pipeline_layout,
+        tick_voxel_compute_pipeline.entry_points[1].pipeline_layout,
         0,
         &descriptor_sets,
         &[],
     );
 
+    let data = [0u32];
+    let raw = bytemuck::cast_slice::<u32, u8>(&data);
+    device.cmd_update_buffer(cmd, counter_buffer, 0, raw);
+    device.cmd_update_buffer(cmd, visible_surface_counter_buffer, 0, raw);
+
+    let data = [0u32, 0u32, 0u32];
+    let raw = bytemuck::cast_slice::<u32, u8>(&data);
+    device.cmd_update_buffer(cmd, indirect_dispatch_buffer, 0, raw);
+
     device.cmd_bind_pipeline(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        tick_voxel_compute_pipeline.pipeline,
+        tick_voxel_compute_pipeline.entry_points[0].pipeline,
     );
-
-    let data = [0u32];
-    let raw = bytemuck::cast_slice::<u32, u8>(&data);
-
-    device.cmd_update_buffer(cmd, counter_buffer, 0, raw);
 
     let barrier = vk::MemoryBarrier2::default()
         .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
@@ -451,9 +460,86 @@ pub unsafe fn execute_voxel_tick_compute(
     device.cmd_pipeline_barrier2(cmd, &dep);
 
     let raw = bytemuck::bytes_of(&push_constants);
-    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
+    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.entry_points[0].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
     
     device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
+
+
+
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        tick_voxel_compute_pipeline.entry_points[1].pipeline,
+    );
+
+    let barrier = vk::MemoryBarrier2::default()
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+    let barriers = [barrier];
+    let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
+    device.cmd_pipeline_barrier2(cmd, &dep);
+
+    let raw = bytemuck::bytes_of(&push_constants);
+    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.entry_points[1].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
+    
+    device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
+
+
+
+
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        tick_voxel_compute_pipeline.entry_points[3].pipeline,
+    );
+
+    let barrier = vk::MemoryBarrier2::default()
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+    let barriers = [barrier];
+    let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
+    device.cmd_pipeline_barrier2(cmd, &dep);
+
+    let raw = bytemuck::bytes_of(&push_constants);
+    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.entry_points[3].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
+    
+    device.cmd_dispatch(cmd, 1, 1, 1);
+
+
+
+
+
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        tick_voxel_compute_pipeline.entry_points[2].pipeline,
+    );
+
+    let barrier = vk::MemoryBarrier2::default()
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+        .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER);
+    let barriers = [barrier];
+    let dep = vk::DependencyInfo::default().memory_barriers(&barriers);
+    device.cmd_pipeline_barrier2(cmd, &dep);
+    
+
+    let raw = bytemuck::bytes_of(&push_constants);
+    device.cmd_push_constants(cmd, tick_voxel_compute_pipeline.entry_points[2].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, raw);
+    
+    device.cmd_dispatch_indirect(cmd, indirect_dispatch_buffer, 0);
+
+
+
+
 
     let voxel_image_write_to_read = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::GENERAL)

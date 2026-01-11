@@ -46,7 +46,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 block_uvs;
     uint3 block_pos;
 
-    for (int i = 0; i < 128; i++) {
+    for (int i = 0; i < SIZE; i++) {
         Voxel voxel = fetcher.fetch((int3)floored_pos);
 
         if (voxel.active) {
@@ -87,28 +87,6 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                 tint *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
             } else {
                 hit = true;
-
-                // if face = 0, enabled faces = 100111, target face is the 1st bit from the right, packed index = 0
-                // 100111
-                // (100111 << 6) & 0b111111
-                // 0
-                // count(0) = 0
-
-                // if face = 1, enabled faces = 100111, target face is the 2nd bit from the right, packed index = 1
-                // 100111
-                // (100111 << 5) & 0b111111
-                // count(100) = 1
-
-                // if face = 4, enabled faces = 110011, target face is the 5th bit from the right, packed index = 2
-
-                // first bit (from the left) is the corresponding face, but we count bits from the left
-                // count number of valid bits until we reach (6-face) (counting from right)
-
-                // we always only look at one face...
-                // we can optimize the surface data fetch by knowing this
-
-                // adds 2 padding bits to the right at the start
-                // IT WORKS!!!
                 break;
             }
         }
@@ -127,6 +105,27 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         float3 shadow = 0.0;
 
         if (USE_PIXELATED_SHADOWS) {
+            // if face = 0, enabled faces = 100111, target face is the 1st bit from the right, packed index = 0
+            // 100111
+            // (100111 << 6) & 0b111111
+            // 0
+            // count(0) = 0
+
+            // if face = 1, enabled faces = 100111, target face is the 2nd bit from the right, packed index = 1
+            // 100111
+            // (100111 << 5) & 0b111111
+            // count(100) = 1
+
+            // if face = 4, enabled faces = 110011, target face is the 5th bit from the right, packed index = 2
+
+            // first bit (from the left) is the corresponding face, but we count bits from the left
+            // count number of valid bits until we reach (6-face) (counting from right)
+
+            // we always only look at one face...
+            // we can optimize the surface data fetch by knowing this
+
+            // adds 2 padding bits to the right at the start
+            // IT WORKS!!!
             uint funny_index = funny_index_magic & ~(0b111111 << (32 - 6));
             if (funny_index != INVALID) {
                 uint enabled_faces = (funny_index_magic >> (32 - 6)) & 0b111111;
@@ -181,8 +180,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         CameraData camera_data = CameraData(-ray_dir);
         SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 3 : 0);
         color = brdf(pbr_surface_data, camera_data, sun_data);
-        //color = pixels / 8.0;
-        //color = light(sun.xyz, fetcher, (uint3)floored_pos, world, ray_dir, uv, normal, ao, shadow);
+        //color = shadow;
     } else {
         color = sky(sun.xyz, ray_dir);
     }

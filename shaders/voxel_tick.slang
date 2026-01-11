@@ -5,13 +5,23 @@
 RWTexture3D<uint8_t> voxels;
 
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<SurfaceData> surface_data_buffer;
-
-[[vk::binding(2, 0)]]
 RWTexture3D<uint> voxel_indices;
 
+[[vk::binding(2, 0)]]
+RWStructuredBuffer<SurfaceData> surface_data_buffer;
+
 [[vk::binding(3, 0)]]
-RWStructuredBuffer<Atomic<uint>> counter;
+RWStructuredBuffer<Atomic<uint>> surface_counter;
+
+[[vk::binding(4, 0)]]
+RWStructuredBuffer<uint> visible_surfaces;
+
+[[vk::binding(5, 0)]]
+RWStructuredBuffer<Atomic<uint>> visible_surfaces_counter;
+
+[[vk::binding(6, 0)]]
+RWStructuredBuffer<uint32_t3> indirect_dispatch_size;
+
 
 static const int3[] offsets = {
     int3(1, 0, 0),
@@ -38,7 +48,7 @@ uint calculate_enabled_faces(uint3 id) {
 
 [SpecializationConstant] const uint SHADOW_SAMPLES_PER_TICK = 4;
 [SpecializationConstant] const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
-[SpecializationConstant] const bool SHADOW_TEMPORAL = true;
+[SpecializationConstant] const bool SHADOW_TEMPORAL = false;
 [SpecializationConstant] const bool SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR = true;
 [SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR = 5.0;
 [SpecializationConstant] const float SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN = 0.4;
@@ -64,12 +74,13 @@ void unwrap(uint3 id: SV_DispatchThreadID) {
         uint prev_block_index = prev_packed_index & ~(111111 << 26);
         uint num_enabled_faces = countbits(enabled_faces);
 
-        uint block_index = counter[0].add(num_enabled_faces, MemoryOrder.Relaxed);
+        uint block_index = surface_counter[0].add(num_enabled_faces, MemoryOrder.Relaxed);
         uint packed_index = block_index | enabled_faces << (32 - 6);
         voxel_indices[id] = packed_index;
 
         for (int i = 0; i < num_enabled_faces; i++) {
-            SurfaceData data = surface_data_buffer[prev_block_index + i];
+            SurfaceData data = SurfaceData();
+            //SurfaceData data = surface_data_buffer[prev_block_index + i];
             surface_data_buffer[block_index + i] = data;
         }
     } else {
@@ -78,60 +89,19 @@ void unwrap(uint3 id: SV_DispatchThreadID) {
     }
 }
 
+
 [shader("compute")]
 [numthreads(8, 8, 8)]
-void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
-    
-    // this basically moves the block down if the block underneath it is empty air
-    // this simulates gravity
-    /*
-    if ((voxels[id - uint3(0, 1, 0)] & 1) == 0 && (voxels[id] & 1) == 1 && id.y > 0 && (tick % 16) == 0) {
-        voxels[id - uint3(0, 1, 0)] = voxels[id];
-        voxels[id] = 0;
-        return;
-    }
-    */
-
-    // skip if the block is empty
-    if ((voxels[id] & 1) == 0) {
-        voxel_indices[id] = INVALID;
-        return;
-    }
-
+void unpack(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
     // TREAT THIS AS -1 SINCE WE DO SOME BIT TWIDDLING AT THE END
     // Contains both the block index and enabled faces bitset
-    uint packed_index = INVALID;
+    uint packed_index = voxel_indices[id];
 
-    // this calculates the surface texels for each valid voxel
-    // it checks the 6 nearby voxels and creates a surface if they are empty / refractive
-
-    if ((tick % 32) == 0) {
-        uint enabled_faces = calculate_enabled_faces(id);
-
-        if (enabled_faces > 0) {
-            uint prev_packed_index = voxel_indices[id];
-            uint prev_block_index = prev_packed_index & ~(111111 << 26);
-
-            uint block_index = counter[0].add(countbits(enabled_faces), MemoryOrder.Relaxed);
-            packed_index = block_index;
-            packed_index |= enabled_faces << (32 - 6);
-            voxel_indices[id] = packed_index;
-
-            for (int i = 0; i < countbits(enabled_faces); i++) {
-                SurfaceData data = surface_data_buffer[prev_block_index + i];
-
-                AllMemoryBarrier();
-                surface_data_buffer[block_index + i] = data;
-            }
-        } else {
-            packed_index = INVALID;
-            voxel_indices[id] = INVALID;
-        }
-    } else {
-        packed_index = voxel_indices[id];
+    // skip if the block has no surface
+    if (packed_index == INVALID) {
+        return;
     }
 
-    
     float3 diff = normalize((float3)id - position.xyz + 0.5);
     bool block_visible = dot(forward.xyz, diff) > 0.0;
 
@@ -139,9 +109,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 
     uint block_index = packed_index & ~(0b111111 << (32 - 6));
     uint enabled_faces = (packed_index >> (32 - 6)) & 0b111111;
 
-    float delta = delta_raw;
-
-    if (enabled_faces > 0 && block_visible && packed_index != INVALID) {
+    if (enabled_faces > 0 && block_visible) {
         uint packed_face_index = 0;
         for (int i = 0; i < 6; i++) {
             if (((enabled_faces >> i) & 1) == 1) {
@@ -150,65 +118,103 @@ void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 
                 // TODO: do a cheap "visibility" test that takes account of voxel occlusion and reflections 
                 bool face_visible_camera = dot(offsets[i], diff) < 0.0;
                 
-                if (face_visible_camera) {
-                    // Read cached texel data
-                    SurfaceData data = surface_data_buffer[block_index + packed_face_index];
+                // write the [world block pos, side index, packed side index] that we will need to read in the next compute shader
+                int write_index = visible_surfaces_counter[0].increment(MemoryOrder.Relaxed);
+                int side_index = i;
+                int packed_side_index = packed_face_index;
 
-                    // Execute the shadow calculation for every possible texel...
-                    // TODO: ideally do an extra check to verify if this texel is visible by the main camera
-                    for (int k = 0; k < 16; k++) {
-                        int p = k;
+                // encode world block index as 3 bytes
+                int world_block_index = id.x | id.y << 8 | id.z << 16;
+                visible_surfaces[write_index] = world_block_index | (side_index << (32 - 3)) | (packed_side_index << (32 - 6));
 
-                        // Skip the texel if it doesn't face the sun
-                        if (dot(offsets[i], sun.xyz) <= 0) {
-                            data.colors[p] = uint8_t4(0);
-                            continue;
-                        }
-
-
-                        uint2 uv = uint2(p % 4, p / 4);
-                        uint3 unflattened = unflatten_uvs(i / 2, i % 2 == 0, uv);
-                        
-                        // ts so slow twin...
-                        // ts pmo... ong...
-                        float3 shadow_color = 0.0;
-                        float spread = SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_RANDOM_ANGLE_SPREAD_FACTOR : 0; 
-                        for (int s = 0; s < (SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_SAMPLES_PER_TICK : 1); s++) {
-                            // jarvis... randominate this shit...
-                            float3 sun_sample = normalize(sun.xyz + (hash33(s * 2432.43243 - (id + unflattened / 3.0) * 232.342 + tick * 43.23) - 0.5) * spread);
-                            float3 world_pos = id + 0.125 + offsets[i] * 0.15 + unflattened / 4.0 + sun_sample * 0.15;
-                            shadow_color += dda_shadownate(voxels, sun_sample, world_pos);
-                        }
-
-
-                        uint8_t4 old = data.colors[p];
-                        float3 a = old.xyz / 255.0;
-                        float3 b = shadow_color / SHADOW_SAMPLES_PER_TICK;
-                        float3 output = 0.0;
-
-                        // TODO: find a better accumulator function...
-                        if (SHADOW_TEMPORAL) {
-                            if (SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR) {
-                                float3 l = SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN;
-                                output = a + SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR * clamp(b - a, -l, l) * delta;
-                            } else {
-                                output = lerp(a, b, clamp(SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR * delta, 0.01, 1.0));
-                            }
-                        } else {
-                            output = b;
-                        }
-
-
-                        data.colors[p] = uint8_t4((uint8_t3)(clamp(output, 0, 1) * 255), 0);
-                    }
-
-                    // Write new texel data
-                    surface_data_buffer[block_index + packed_face_index] = data;
-                }
 
                 // TODO: Figure out how to do the bit magic but in reverse order?
                 packed_face_index++;
             }
         }
     }
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void copyDispatchSize(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
+    indirect_dispatch_size[0] = uint32_t3(visible_surfaces_counter[0].load(MemoryOrder.Relaxed) / 64 + 1, 1, 1);
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta) {
+    if (id.x >= visible_surfaces_counter[0].load(MemoryOrder.Relaxed)) {
+        return;
+    }
+
+    // packed index that contains the block index, side index, and packed side index
+    uint packed_index = visible_surfaces[id.x];
+
+    // unpack...
+    uint world_block_index = packed_index & ~(0b111111 << (32 - 6));
+    uint side_index = (packed_index >> (32 - 3)) & 0b111;   
+    uint packed_face_index = (packed_index >> (32 - 6)) & 0b111;
+
+    uint3 block_pos = uint3(world_block_index & 0xFF, (world_block_index >> 8) & 0xFF, (world_block_index >> 16) & 0xFF);
+    uint block_index = voxel_indices[block_pos] & ~(0b111111 << (32 - 6));
+    
+    SurfaceData data = surface_data_buffer[block_index + packed_face_index];
+    uint i = side_index;
+
+    // Execute the shadow calculation for every possible texel...
+    // TODO: ideally do an extra check to verify if this texel is visible by the main camera
+    for (int k = 0; k < 16; k++) {
+        int p = k;
+
+        /*
+        uint2 uv = uint2(p % 4, p / 4);
+        uint3 unflattened = unflatten_uvs(i / 2, i % 2 == 0, uv);
+        data.colors[p] = uint8_t4((uint8_t3)(unflattened * 255), 0);
+        */
+
+        // Skip the texel if it doesn't face the sun
+        if (dot(offsets[i], sun.xyz) <= 0) {
+            data.colors[p] = uint8_t4(0);
+            continue;
+        }
+
+
+        uint2 uv = uint2(p % 4, p / 4);
+        uint3 unflattened = unflatten_uvs(i / 2, i % 2 == 0, uv);
+        
+        // ts so slow twin...
+        // ts pmo... ong...
+        float3 shadow_color = 0.0;
+        float spread = SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_RANDOM_ANGLE_SPREAD_FACTOR : 0; 
+        for (int s = 0; s < (SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_SAMPLES_PER_TICK : 1); s++) {
+            // jarvis... randominate this shit...
+            float3 sun_sample = normalize(sun.xyz + (hash33(s * 2432.43243 - (block_pos + unflattened / 3.0) * 232.342 + tick * 43.23) - 0.5) * spread);
+            float3 world_pos = block_pos + 0.125 + offsets[i] * 0.15 + unflattened / 4.0 + sun_sample * 0.15;
+            shadow_color += dda_shadownate(voxels, sun_sample, world_pos);
+        }
+
+
+        uint8_t4 old = data.colors[p];
+        float3 a = old.xyz / 255.0;
+        float3 b = shadow_color / SHADOW_SAMPLES_PER_TICK;
+        float3 output = 0.0;
+
+        // TODO: find a better accumulator function...
+        if (SHADOW_TEMPORAL) {
+            if (SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR) {
+                float3 l = SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_MARGIN;
+                output = a + SHADOW_TEMPORAL_CLAMPED_ACCUMULATOR_FACTOR * clamp(b - a, -l, l) * delta;
+            } else {
+                output = lerp(a, b, clamp(SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR * delta, 0.01, 1.0));
+            }
+        } else {
+            output = b;
+        }
+
+
+        data.colors[p] = uint8_t4((uint8_t3)(clamp(output, 0, 1) * 255), 0);
+    }
+
+    surface_data_buffer[block_index + packed_face_index] = data;
 }

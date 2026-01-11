@@ -35,6 +35,10 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
 use crate::pipeline::ComputePipeline;
+use crate::pipeline::MultiComputePipeline;
+use crate::pipeline::VoxelTickPipeline;
+use crate::voxel::_SIZE;
+use crate::voxel::Buffer;
 
 struct InternalApp {
     input: Input,
@@ -66,14 +70,17 @@ struct InternalApp {
 
     render_compute_pipeline: ComputePipeline,
     generate_voxel_compute_pipeline: ComputePipeline,
-    tick_voxel_compute_pipeline: ComputePipeline,
+    tick_voxel_compute_pipeline: VoxelTickPipeline,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
     voxel_image: (vk::Image, Allocation, vk::ImageView),
     voxel_surface_index_image: (vk::Image, Allocation, vk::ImageView),
-    voxel_surface_buffer: (vk::Buffer, Allocation),
-    voxel_surface_counter_buffer: (vk::Buffer, Allocation),
+    voxel_surface_buffer: Buffer,
+    voxel_surface_counter_buffer: Buffer,
+    visible_surface_buffer: Buffer,
+    visible_surface_counter_buffer: Buffer,
+    visible_surface_indirect_dispatch_buffer: Buffer,
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
 }
@@ -216,8 +223,16 @@ impl InternalApp {
 
         let voxel_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, c"voxel image");
         let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
-        let voxel_surface_buffer = voxel::create_voxel_surface_buffer(&device, &mut allocator, &debug_marker);
-        let voxel_surface_counter_buffer = voxel::create_voxel_counter_buffer(&device, &mut allocator, &debug_marker);
+
+        const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
+        const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
+
+        let voxel_surface_buffer = voxel::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let voxel_surface_counter_buffer = voxel::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
+        let visible_surface_buffer = voxel::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let visible_surface_counter_buffer = voxel::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
+        let visible_surface_indirect_dispatch_buffer = voxel::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDIRECT_BUFFER);
+
 
         voxel::generate_voxel_image(
             &device,
@@ -265,6 +280,9 @@ impl InternalApp {
             voxel_surface_buffer,
             voxel_surface_index_image,
             voxel_surface_counter_buffer,
+            visible_surface_buffer,
+            visible_surface_counter_buffer,
+            visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
         }
     }
@@ -392,8 +410,11 @@ impl InternalApp {
             cmd,
             self.descriptor_pool,
             self.queue_family_index,
-            self.voxel_surface_buffer.0,
-            self.voxel_surface_counter_buffer.0,
+            self.voxel_surface_buffer.buffer,
+            self.voxel_surface_counter_buffer.buffer,
+            self.visible_surface_buffer.buffer,
+            self.visible_surface_counter_buffer.buffer,
+            self.visible_surface_indirect_dispatch_buffer.buffer,
             self.voxel_image.0,
             self.voxel_image.2,
             self.voxel_surface_index_image.0,
@@ -476,7 +497,7 @@ impl InternalApp {
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
         let descriptor_voxel_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.voxel_surface_buffer.0)
+            .buffer(self.voxel_surface_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
@@ -698,13 +719,20 @@ impl InternalApp {
         self.allocator.free(self.voxel_surface_index_image.1).unwrap();
         log::info!("destroyed voxel surface index image");
 
-        self.device.destroy_buffer(self.voxel_surface_buffer.0, None);
-        self.allocator.free(self.voxel_surface_buffer.1).unwrap();
-        log::info!("destroyed voxel buffer");
+        self.voxel_surface_buffer.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed voxel surface buffer");
 
-        self.device.destroy_buffer(self.voxel_surface_counter_buffer.0, None);
-        self.allocator.free(self.voxel_surface_counter_buffer.1).unwrap();
+        self.voxel_surface_counter_buffer.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed voxel counter buffer");
+
+        self.visible_surface_buffer.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed visible surfaces buffer");
+
+        self.visible_surface_counter_buffer.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed visible surfaces counter buffer");
+
+        self.visible_surface_indirect_dispatch_buffer.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed indirect dispatch buffer");
 
         // TODO: Just cope with the error messages vro
         self.device
