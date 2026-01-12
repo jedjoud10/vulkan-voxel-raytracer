@@ -2,8 +2,21 @@
 #define OTHER
 #include <hash.slang>
 
-static const int SIZE = 64;
+static const int MIP_LEVELS = 7;
+static const int SIZE = 1 << (MIP_LEVELS-1);
 static const uint INVALID = 0x3FFFFFF;
+
+
+public static const int3[] CHILDREN_OFFSETS = {
+    int3(0, 0, 0),
+    int3(1, 0, 0),
+    int3(0, 0, 1),
+    int3(1, 0, 1),
+    int3(0, 1, 0),
+    int3(1, 1, 0),
+    int3(0, 1, 1),
+    int3(1, 1, 1),
+};
 
 struct Voxel {
     bool active;
@@ -42,6 +55,134 @@ struct Fetcher {
         
         return Voxel.from_raw(raw);
     }
+
+    uint8_t fetch_raw(int3 position, int level = 0) {
+        uint8_t raw = 0;
+
+        if (all(position >= 0) && all(position < SIZE)) {
+            raw = voxels.Load(int4(position, level));
+        }
+        
+        return raw;
+    }
+}
+
+struct Queue<let N: int, T> {
+    T[N] elements;
+    uint readHead;
+    uint writeHead;
+    uint length;
+
+    __init() {
+        length = 0;
+        writeHead = 0;
+        readHead = 0;
+    }
+
+    [mutating]
+    void append(T element) {
+        if (length == N) {
+            printf("cannot append to queue. queue full. length=%i, wh=%i, rh=%i", length, writeHead, readHead);
+            return;
+        }
+
+        elements[writeHead] = element;
+        writeHead++;
+        length++;
+        writeHead %= N;
+    }
+
+    [mutating]
+    bool tryDequeue(out T element) {
+        if (readHead == writeHead) {
+            return false;
+        }
+
+        element = elements[readHead];
+        readHead++; 
+        readHead %= N; 
+        length--;
+        return true;
+    }
+}
+
+// https://tavianator.com/2022/ray_box_boundary.html
+bool ray_box_intersection(
+    float3 ray_dir,
+    float3 ray_pos,
+    float3 aabb_min,
+    float3 aabb_max,
+) {
+    float3 inv_dir = 1 / ray_dir;
+    float tmin = 0.0, tmax = 999999;
+
+    for (int d = 0; d < 3; ++d) {
+        float t1 = (aabb_min[d] - ray_pos[d]) * inv_dir[d];
+        float t2 = (aabb_max[d] - ray_pos[d]) * inv_dir[d];
+
+        tmin = max(tmin, min(t1, t2));
+        tmax = min(tmax, max(t1, t2));
+    }
+
+    return tmin < tmax;
+}
+
+float4 traverse(
+    Fetcher fetcher,
+    float3 ray_dir,
+    float3 ray_pos,
+) {
+    //return ray_box_intersection(ray_dir, ray_pos, -3, 3) ? 1 : 0;
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+    Queue<16, uint4> queue;
+    queue.append(uint4(0, 0, 0, 0)); // add the root node 
+
+    uint4 pos;
+    int iterations = 0;
+    bool hit = false;
+    while (queue.tryDequeue(pos)) {
+        uint8_t1 fetched = fetcher.fetch_raw(pos.xyz, MIP_LEVELS - pos.w - 1);
+        int mip_scale = (1 << pos.w);
+        float3 aabb_size = SIZE / mip_scale;
+        float3 aabb_min = pos.xyz * aabb_size;
+        float3 aabb_max = pos.xyz * aabb_size + aabb_size; 
+        
+        if (iterations == 2) {
+            //printf("%i %i %i %f %f", pos.x, pos.y, pos.z, aabb_min.x, aabb_max.x);
+        }
+
+        // check if we intersect with this node
+        if (ray_box_intersection(ray_dir, ray_pos, aabb_min, aabb_max)) {
+            // check if this node is a parent and it has children... 
+            if ((fetched & 64) == 64 && pos.w != (MIP_LEVELS - 1)) {
+                // add the children to the queue
+                for (int c = 0; c < 8; c++) {
+                    int3 child_position = pos.xyz * 2 + CHILDREN_OFFSETS[c];
+                    int child_level = pos.w + 1;
+                    uint4 packed = uint4(child_position, child_level);
+
+                    
+                    // if empty, skip...
+                    if (fetcher.fetch_raw(packed.xyz, MIP_LEVELS - packed.w - 1) != 0) {
+                        queue.append(packed);
+                    }
+                }
+            }
+
+            // check if this node is a voxel leaf node...
+            if ((fetched & 1) == 1) {
+                hit = true;
+                //break;
+            }
+        }
+
+        iterations++;
+    }
+
+    return iterations / 1024.0;
+    //return hit ? 1.0 : 0.0;
+    //return iterations / 4.0;
 }
 
 bool dda<let N : int>(

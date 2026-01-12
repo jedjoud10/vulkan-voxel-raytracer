@@ -36,6 +36,10 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
 
     Fetcher fetcher = Fetcher(voxels);
+
+
+    output[id.xy] = traverse(fetcher, ray_dir, ray_pos);
+    return;
     
     float3 color = 0.0;
     bool hit = false;

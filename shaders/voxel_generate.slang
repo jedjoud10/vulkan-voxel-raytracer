@@ -41,12 +41,14 @@ void propagateMipMaps(uint3 id: SV_DispatchThreadID) {
 		for (int y = 0; y < 2; y++) {
 			for (int z = 0; z < 2; z++) {
                 uint3 pos = id * 2 + uint3(x, y, z);
-                has_voxels |= (prev_mipmapped_voxels[pos] & 1) == 1;
+                bool is_full_voxel = (prev_mipmapped_voxels[pos] & 1) == 1;
+                bool was_propagated = (prev_mipmapped_voxels[pos] & 64) == 64;
+                has_voxels |= is_full_voxel || was_propagated;
             }
         }
     }
 
-    next_mipmapped_voxels[id] = (uint8_t1)(has_voxels ? 1 : 0);
+    next_mipmapped_voxels[id] = (uint8_t1)(has_voxels ? 64 : 0);
 }
 
 [shader("compute")]
