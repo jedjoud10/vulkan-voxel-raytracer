@@ -28,6 +28,31 @@ uint3 unflatten_uvs(int face, bool negate, uint2 flattened) {
     return -1;
 }
 
+/*
+public static const int3[] FACE_NORMALS = {
+    int3(1, 0, 0),
+    int3(-1, 0, 0),
+    int3(0, 1, 0),
+    int3(0, -1, 0),
+    int3(0, 0, 1),
+    int3(0, 0, -1),
+};
+*/
+
+float3 transform_face_tangent_to_ws_normal(int global_face, float2 flattened) {
+    float val = (global_face % 2 == 0) ? 1 : -1;
+
+    if (global_face == 0 || global_face == 1) {
+        return float3(val, flattened.x, flattened.y);
+    } else if (global_face == 2 || global_face == 3) {
+        return float3(flattened.x, val, flattened.y);
+    } else if (global_face == 4 || global_face == 5) {
+        return float3(flattened.x, flattened.y, val);
+    }
+
+    return 0;
+}
+
 // Narkowicz 2015, "ACES Filmic Tone Mapping Curve"
 float3 aces(float3 x) {
     const float a = 2.51;

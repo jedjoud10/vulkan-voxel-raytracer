@@ -5,13 +5,13 @@
 RWTexture2D<float4> output;
 
 [[vk::binding(1, 0)]]
-RWTexture3D<uint8_t> voxels;
+Texture3D<uint8_t> voxels;
 
 [[vk::binding(2, 0)]]
-RWStructuredBuffer<SurfaceData> surface_data_buffer;
+StructuredBuffer<SurfaceData> surface_data_buffer;
 
 [[vk::binding(3, 0)]]
-RWTexture3D<uint> voxels_indices;
+Texture3D<uint> voxels_indices;
 
 [SpecializationConstant] const bool USE_PIXELATED_SHADOWS = true;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
@@ -47,6 +47,8 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 block_uvs;
     uint3 block_pos;
 
+    bool lastWasAir = true;
+
     for (int i = 0; i < SIZE*2; i++) {
         Voxel voxel = fetcher.fetch((int3)floored_pos);
 
@@ -69,32 +71,39 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
             }
             block_pos = (uint3)floored_pos;
 
-            if (voxel.refractive || voxel.reflective) {
-                //normal += float3(sin(world.x * 10 + 0.2565), cos(world.y * 10 + 0.89684), sin(world.z * 10 - 0.211256)) * 0.12;
-                
-                if (USE_NOISY_REFRACTIONS_REFLECTIONS) {
-                    normal += (hash33(block_uvs * float3(23.231, -435.4354, 9412.1)) - 0.5) * 0.05;
-                }
+            if ((voxel.refractive || voxel.reflective)) {
+                if (lastWasAir) {
+                    //normal += float3(sin(world.x * 10 + 0.2565), cos(world.y * 10 + 0.89684), sin(world.z * 10 - 0.211256)) * 0.12;
+                    
+                    if (USE_NOISY_REFRACTIONS_REFLECTIONS) {
+                        normal += (hash33(block_uvs * float3(23.231, -435.4354, 9412.1)) - 0.5) * 0.05;
+                    }
 
-                normal = normalize(normal);
+                    normal = normalize(normal);
 
-                if (voxel.refractive) {
-                    //ray_dir = normalize(ray_dir - normal);
-                    //ray_dir = ray_dir;
-                    ray_dir = refract(ray_dir, normal, 0.7);
-                } else {
-                    ray_dir = reflect(ray_dir, normal);
+                    if (voxel.refractive) {
+                        //ray_dir = normalize(ray_dir - normal);
+                        //ray_dir = ray_dir;
+                        ray_dir = refract(ray_dir, normal, 0.7);
+                    } else {
+                        ray_dir = reflect(ray_dir, normal);
+                    }
+
+                    inv_dir = 1 / ray_dir;
+                    dir_sign = sign(ray_dir);
+                    side_dist = (floored_pos - world + 0.5 + 0.5 * dir_sign);
+                    ray_pos = world;
                 }
                 
-                inv_dir = 1 / ray_dir;
-                dir_sign = sign(ray_dir);
-                side_dist = (floored_pos - world + 0.5 + 0.5 * dir_sign);
-                ray_pos = world;
-                tint *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
+                tint *= per_block_unique_colour(block_pos);
             } else {
                 hit = true;
                 break;
             }
+
+            lastWasAir = false;
+        } else {
+            lastWasAir = true;
         }
 
         float3 reconst = side_dist * inv_dir;
@@ -148,7 +157,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
                 shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
             }
         } else {
-            shadow = dda_shadownate(voxels, sun.xyz, world + sun.xyz * 0.01);
+            shadow = dda_shadownate(fetcher, sun.xyz, world + sun.xyz * 0.01);
         }
         
         ao_solver solver;
@@ -178,15 +187,28 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         float3 grass = float3(33, 60, 30) / 255;
         float3 dirt = float3(58, 33, 22) / 255;
 
+        float3 sky_reflected_dir = reflect(ray_dir, normal);
         bool top_face = normal.y > 0.5;
         bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
         float3 diffuse = (top_pixels ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
+
+        float sky_visibility = 1.0;
+        /*
+        float sky_visibility = 0.0;
+
+        for (int k = 0; k < 8; k++) {
+            float3 dir = normalize(sky_reflected_dir + (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0) * 0.2);
+            sky_visibility += dda<16>(fetcher, dir, world + dir * 0.1) ? 0 : 1;
+        }
+
+        sky_visibility /= 8.0;
+        */
         
-        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.25, 0.0, ao, shadow);
+        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
         CameraData camera_data = CameraData(-ray_dir);
-        SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 3 : 0);
-        //color = brdf(pbr_surface_data, camera_data, sun_data);
-        color = block_pos;
+        SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 0.8 : 0);
+        color = brdf(pbr_surface_data, camera_data, sun_data);
+        //color = block_pos;
     } else {
         color = sky(sun.xyz, ray_dir);
     }

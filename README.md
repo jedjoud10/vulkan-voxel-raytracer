@@ -34,3 +34,4 @@
     1. Have one compute shader create the visible cube-facets. Does no DDA computation by itself.
     2. Invoke another shader *indirectly* to do the expensive per-face computations for each face, where each invocation is a separate face.
 - This *should* improve performance since now we can use the threads more efficiently. Must profile first to see if my guess is correct (thread usage is low).
+- Some sort of water simulation using SPH and sub-meter voxels

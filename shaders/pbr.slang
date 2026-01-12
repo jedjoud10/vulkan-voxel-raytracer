@@ -76,6 +76,7 @@ public struct PbrSurfaceData {
 	public float metallic;
 	public float visibility;
     public float3 shadows;
+	public float sky_visibility;
 };
 
 // Bidirectional reflectance distribution function, aka PBRRRR
@@ -109,7 +110,11 @@ public float3 brdf(
 	float3 ambient = irradiance * surface.diffuse * kd * surface.visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
 	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
-	return brdf + ambient * 0.8;
+
+	float3 specular_fresnel_ambient = getEnvironmentSpecular(reflect(camera.view, surface.normal), 0.2, skyColor, groundColor) * pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
+
+	//return specular_fresnel_ambient;
+	return brdf + ambient * 0.8 + specular_fresnel_ambient * 0.3;
 	//return specular;
 	//return ambient * 0.5;
 }

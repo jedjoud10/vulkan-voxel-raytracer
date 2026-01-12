@@ -42,7 +42,7 @@ float noise(float2 p) {
     float oo = hash12(floor(p) + float2(1, 1));
 
     float2 uv = frac(p);
-    return lerp(lerp(zz, zo, uv.x), lerp(oz, oo, uv.x), uv.y);
+    return lerp(lerp(zz, zo, uv.x), lerp(oz, oo, uv.x), uv.y) * 2 - 1;
 }
 
 #endif

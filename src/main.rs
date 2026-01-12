@@ -38,8 +38,10 @@ use winit::window::{Window, WindowId};
 use crate::buffer::{Buffer, create_counter_buffer, create_buffer};
 use crate::pipeline::ComputePipeline;
 use crate::pipeline::MultiComputePipeline;
+use crate::pipeline::VoxelGeneratePipeline;
 use crate::pipeline::VoxelTickPipeline;
 use crate::voxel::_SIZE;
+use crate::voxel::VoxelImage;
 
 struct InternalApp {
     input: Input,
@@ -70,12 +72,12 @@ struct InternalApp {
     pool: vk::CommandPool,
 
     render_compute_pipeline: ComputePipeline,
-    generate_voxel_compute_pipeline: ComputePipeline,
+    generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
-    voxel_image: (vk::Image, Allocation, vk::ImageView),
+    voxel_image: VoxelImage,
     voxel_surface_index_image: (vk::Image, Allocation, vk::ImageView),
     voxel_surface_buffer: Buffer,
     voxel_surface_counter_buffer: Buffer,
@@ -222,7 +224,8 @@ impl InternalApp {
         let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device, &debug_marker);
         log::info!("created voxel tick compute pipeline");
 
-        let voxel_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, c"voxel image");
+        let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
+
         let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
 
         const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
@@ -241,8 +244,7 @@ impl InternalApp {
             pool,
             descriptor_pool,
             queue_family_index,
-            voxel_image.0,
-            voxel_image.2,
+            &voxel_image,
             voxel_surface_index_image.0,
             voxel_surface_index_image.2,
             &generate_voxel_compute_pipeline,            
@@ -298,7 +300,7 @@ impl InternalApp {
             &mut self.allocator,
             self.queue,
             self.pool,
-            self.voxel_image.0,
+            &self.voxel_image,
             voxel::Voxel {
                 active: true,
                 reflective: self.ticker.count % 4 == 0,
@@ -416,8 +418,7 @@ impl InternalApp {
             self.visible_surface_buffer.buffer,
             self.visible_surface_counter_buffer.buffer,
             self.visible_surface_indirect_dispatch_buffer.buffer,
-            self.voxel_image.0,
-            self.voxel_image.2,
+            &self.voxel_image,
             self.voxel_surface_index_image.0,
             self.voxel_surface_index_image.2,
             &self.tick_voxel_compute_pipeline,
@@ -490,7 +491,7 @@ impl InternalApp {
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
         let descriptor_voxel_image_info = vk::DescriptorImageInfo::default()
-            .image_view(self.voxel_image.2)
+            .image_view(self.voxel_image.image_view_whole)
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
         let descriptor_voxel_surface_index_image_info = vk::DescriptorImageInfo::default()
@@ -710,9 +711,7 @@ impl InternalApp {
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");
 
-        self.device.destroy_image_view(self.voxel_image.2, None);
-        self.device.destroy_image(self.voxel_image.0, None);
-        self.allocator.free(self.voxel_image.1).unwrap();
+        self.voxel_image.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed voxel image");
 
         self.device.destroy_image_view(self.voxel_surface_index_image.2, None);

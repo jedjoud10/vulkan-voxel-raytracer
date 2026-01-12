@@ -3,9 +3,10 @@ use std::{ffi::{CStr, CString}, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 
-use crate::pipeline::{ComputePipeline, PushConstants2, VoxelTickPipeline};
+use crate::pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline};
 
-pub const SIZE: u32 = 256;
+pub const MIP_LEVELS: usize = 6;
+pub const SIZE: u32 = 1 << (MIP_LEVELS as u32);
 pub const _SIZE: usize = SIZE as usize;
 
 pub unsafe fn create_voxel_image(
@@ -74,18 +75,129 @@ pub unsafe fn create_voxel_image(
     (voxel_image, allocation, voxel_image_view)
 }
 
+pub struct VoxelImage {
+    pub image: vk::Image,
+    pub allocation: Allocation,
+    pub per_mip_views: [vk::ImageView; MIP_LEVELS as usize],
+    pub image_view_whole: vk::ImageView,
+}
+impl VoxelImage {
+    pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
+        for x in self.per_mip_views {
+            device.destroy_image_view(x, None);    
+        }
+        
+        device.destroy_image_view(self.image_view_whole, None);
+        device.destroy_image(self.image, None);
+        allocator.free(self.allocation).unwrap();
+    }
+}
+
+pub unsafe fn create_voxel_octree_mip_map_image(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+    binder: &Option<ash::ext::debug_utils::Device>,
+    name: &str,
+) -> VoxelImage {
+    let voxel_image_create_info = vk::ImageCreateInfo::default()
+        .extent(vk::Extent3D {
+            width: SIZE,
+            height: SIZE,
+            depth: SIZE,
+        })
+        .format(format)
+        .image_type(vk::ImageType::TYPE_3D)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .mip_levels(MIP_LEVELS as u32)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .usage(usage)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .array_layers(1);
+    let voxel_image = device.create_image(&voxel_image_create_info, None).unwrap();
+    let requirements = device.get_image_memory_requirements(voxel_image);
+
+    let allocation = allocator
+        .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
+            name: &name,
+            requirements: requirements,
+            linear: false,
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedImage(voxel_image),
+            location: gpu_allocator::MemoryLocation::GpuOnly,
+        })
+        .unwrap();
+
+    let device_memory = allocation.memory();
+
+    device
+        .bind_image_memory(voxel_image, device_memory, 0)
+        .unwrap();
+
+
+    let mut per_mip_image_views: [vk::ImageView; MIP_LEVELS] = [Default::default(); MIP_LEVELS];
+    for i in 0..MIP_LEVELS {
+        let subresource_range = vk::ImageSubresourceRange::default()
+            .base_mip_level(i as u32)
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_array_layer(0)
+            .layer_count(1)
+            .level_count(1);
+        let image_view_create_info = vk::ImageViewCreateInfo::default()
+            .image(voxel_image)
+            .format(format)
+            .view_type(vk::ImageViewType::TYPE_3D)
+            .subresource_range(subresource_range);
+        let image_view = device
+            .create_image_view(&image_view_create_info, None)
+            .unwrap();
+
+        
+        crate::debug::set_object_name(image_view, binder, format!("{name} image view mip[{i}]"));
+        per_mip_image_views[i] = image_view;
+    }
+
+    crate::debug::set_object_name(voxel_image, binder, name);
+
+    let subresource_range = vk::ImageSubresourceRange::default()
+        .base_mip_level(0)
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_array_layer(0)
+        .layer_count(1)
+        .level_count(MIP_LEVELS as u32);
+    let image_view_create_info = vk::ImageViewCreateInfo::default()
+        .image(voxel_image)
+        .format(format)
+        .view_type(vk::ImageViewType::TYPE_3D)
+        .subresource_range(subresource_range);
+    let whole_image_view = device
+        .create_image_view(&image_view_create_info, None)
+        .unwrap();
+
+        
+    crate::debug::set_object_name(whole_image_view, binder, format!("{name} image view for whole"));
+    
+    VoxelImage {
+        image: voxel_image,
+        allocation,
+        per_mip_views: per_mip_image_views,
+        image_view_whole: whole_image_view,
+    }
+}
+
 pub unsafe fn generate_voxel_image(
     device: &ash::Device,
     queue: vk::Queue,
     pool: vk::CommandPool,
     descriptor_pool: vk::DescriptorPool,
     queue_family_index: u32,
-    voxel_image: vk::Image,
-    voxel_image_view: vk::ImageView,
+    voxel_image_wrapper: &VoxelImage,
     voxel_indices_image: vk::Image,
     voxel_indices_image_view: vk::ImageView,
-    voxel_generate_pipeline: &ComputePipeline,
+    voxel_generate_pipeline: &VoxelGeneratePipeline,
 ) {
+    let VoxelImage { image: voxel_image, allocation: _, per_mip_views: voxel_mips, image_view_whole: voxel_image_view } = *voxel_image_wrapper;
+    
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
         .level(vk::CommandBufferLevel::PRIMARY)
@@ -99,14 +211,22 @@ pub unsafe fn generate_voxel_image(
     device
         .begin_command_buffer(cmd, &cmd_buffer_begin_info)
         .unwrap();
-    let subresource_range = vk::ImageSubresourceRange::default()
+
+    let all_mips_subresource_range = vk::ImageSubresourceRange::default()
+        .base_mip_level(0)
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_array_layer(0)
+        .layer_count(1)
+        .level_count(MIP_LEVELS as u32);
+
+    let single_mip_subresource_range = vk::ImageSubresourceRange::default()
         .base_mip_level(0)
         .aspect_mask(vk::ImageAspectFlags::COLOR)
         .base_array_layer(0)
         .layer_count(1)
         .level_count(1);
 
-    let first_transition = vk::ImageMemoryBarrier2::default()
+    let first_transition_voxel_image = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::UNDEFINED)
         .new_layout(vk::ImageLayout::GENERAL)
         .src_access_mask(vk::AccessFlags2::NONE)
@@ -116,8 +236,8 @@ pub unsafe fn generate_voxel_image(
         .src_queue_family_index(queue_family_index)
         .dst_queue_family_index(queue_family_index)
         .image(voxel_image)
-        .subresource_range(subresource_range);
-    let first_transition_amogus = vk::ImageMemoryBarrier2::default()
+        .subresource_range(all_mips_subresource_range);
+    let first_transition_voxel_indices = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::UNDEFINED)
         .new_layout(vk::ImageLayout::GENERAL)
         .src_access_mask(vk::AccessFlags2::NONE)
@@ -127,49 +247,79 @@ pub unsafe fn generate_voxel_image(
         .src_queue_family_index(queue_family_index)
         .dst_queue_family_index(queue_family_index)
         .image(voxel_indices_image)
-        .subresource_range(subresource_range);
-    let image_memory_barriers = [first_transition, first_transition_amogus];
+        .subresource_range(single_mip_subresource_range);
+    let image_memory_barriers = [first_transition_voxel_image, first_transition_voxel_indices];
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
 
-    let layouts = [voxel_generate_pipeline.descriptor_set_layout];
+    // we will need multiple descriptor sets
+    // the first one will be for the initial voxel generation
+    // the rest are needed for the propagation of voxel values upwards in the mip-chain. each descriptor set will have the "previous-image" binding and "current-image" bindings
+    let layouts = Vec::from_iter(std::iter::repeat_n(voxel_generate_pipeline.descriptor_set_layout, MIP_LEVELS));
+
+    // updates the descriptors once and for all
+    // this way, subsequent dispatch calls can use the updated descriptors directly
     let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
         .descriptor_pool(descriptor_pool)
         .set_layouts(&layouts);
     let descriptor_sets = device
         .allocate_descriptor_sets(&descriptor_set_allocate_info)
         .unwrap();
-    let descriptor_set = descriptor_sets[0];
+    {    
+        let descriptor_base_layer_voxel_image_info = vk::DescriptorImageInfo::default()
+            .image_view(voxel_mips[0])
+            .image_layout(vk::ImageLayout::GENERAL)
+            .sampler(vk::Sampler::null());
+        let descriptor_image_infos = [descriptor_base_layer_voxel_image_info];
+    
+        // the first descriptor that we allocated will be used for the src voxel image that we will write to originally
+        let base_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .dst_binding(0)
+            .dst_set(descriptor_sets[0])
+            .image_info(&descriptor_image_infos);
+        device.update_descriptor_sets(&[base_descriptor_write], &[]);
 
-    let descriptor_image_info = vk::DescriptorImageInfo::default()
-        .image_view(voxel_image_view)
-        .image_layout(vk::ImageLayout::GENERAL)
-        .sampler(vk::Sampler::null());
-    let descriptor_image_infos = [descriptor_image_info];
+        // we must also write the descriptor sets for the propagated voxel images
+        for i in 1..MIP_LEVELS {
+            let previous_image_view = voxel_mips[i-1];
+            let next_image_view = voxel_mips[i];
 
-    let descriptor_write = vk::WriteDescriptorSet::default()
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .dst_binding(0)
-        .dst_set(descriptor_set)
-        .image_info(&descriptor_image_infos);
+            let descriptor_previous_voxel_image_info = vk::DescriptorImageInfo::default()
+                .image_view(previous_image_view)
+                .image_layout(vk::ImageLayout::GENERAL)
+                .sampler(vk::Sampler::null());
+            let descriptor_next_voxel_image_info = vk::DescriptorImageInfo::default()
+                .image_view(next_image_view)
+                .image_layout(vk::ImageLayout::GENERAL)
+                .sampler(vk::Sampler::null());
+            let descriptor_image_infos = [descriptor_previous_voxel_image_info, descriptor_next_voxel_image_info];
 
-    device
-        .update_descriptor_sets(&[descriptor_write], &[]);
+            let propagate_descriptor_write = vk::WriteDescriptorSet::default()
+                .descriptor_count(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .dst_binding(1)
+                .dst_set(descriptor_sets[i])
+                .image_info(&descriptor_image_infos);
+
+            device.update_descriptor_sets(&[propagate_descriptor_write], &[]);
+        }
+    }
 
     device.cmd_bind_descriptor_sets(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        voxel_generate_pipeline.pipeline_layout,
+        voxel_generate_pipeline.entry_points[0].pipeline_layout,
         0,
-        &descriptor_sets,
+        &descriptor_sets[0..1],
         &[],
     );
 
     device.cmd_bind_pipeline(
         cmd,
         vk::PipelineBindPoint::COMPUTE,
-        voxel_generate_pipeline.pipeline,
+        voxel_generate_pipeline.entry_points[0].pipeline,
     );
 
     device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
@@ -184,10 +334,55 @@ pub unsafe fn generate_voxel_image(
         .src_queue_family_index(queue_family_index)
         .dst_queue_family_index(queue_family_index)
         .image(voxel_image)
-        .subresource_range(subresource_range);
+        .subresource_range(single_mip_subresource_range);
     let image_memory_barriers = [second_transition];
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        voxel_generate_pipeline.entry_points[1].pipeline,
+    );
+
+    for i in 1..MIP_LEVELS {
+        let previous_image_view = voxel_mips[i-1];
+        let next_image_view = voxel_mips[i];
+
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            voxel_generate_pipeline.entry_points[1].pipeline_layout,
+            0,
+            &descriptor_sets[(i)..(i+1)],
+            &[],
+        );
+        
+        device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
+
+        let next_voxel_image_subresource_range = vk::ImageSubresourceRange::default()
+            .base_mip_level(i as u32)
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_array_layer(0)
+            .layer_count(1)
+            .level_count(1);
+
+
+        let next_voxel_image_memory_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(queue_family_index)
+            .dst_queue_family_index(queue_family_index)
+            .image(voxel_image)
+            .subresource_range(next_voxel_image_subresource_range);
+        let image_memory_barriers: [vk::ImageMemoryBarrier2<'_>; 1] = [next_voxel_image_memory_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        device.cmd_pipeline_barrier2(cmd, &dep);
+    }
 
     device.end_command_buffer(cmd).unwrap();
 
@@ -218,8 +413,7 @@ pub unsafe fn execute_voxel_tick_compute(
     visible_surface_buffer: vk::Buffer,
     visible_surface_counter_buffer: vk::Buffer,
     indirect_dispatch_buffer: vk::Buffer,
-    voxel_image: vk::Image,
-    voxel_image_view: vk::ImageView,
+    voxel_image: &VoxelImage,
     voxel_indices_image: vk::Image,
     voxel_indices_image_view: vk::ImageView,
     tick_voxel_compute_pipeline: &VoxelTickPipeline,
@@ -242,7 +436,7 @@ pub unsafe fn execute_voxel_tick_compute(
         .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
         .src_queue_family_index(queue_family_index)
         .dst_queue_family_index(queue_family_index)
-        .image(voxel_image)
+        .image(voxel_image.image)
         .subresource_range(subresource_range);
     let voxel_indices_image_read_to_write = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::GENERAL)
@@ -311,7 +505,7 @@ pub unsafe fn execute_voxel_tick_compute(
     let descriptor_set = descriptor_sets[0];
 
     let descriptor_voxel_image_view_info = vk::DescriptorImageInfo::default()
-        .image_view(voxel_image_view)
+        .image_view(voxel_image.image_view_whole)
         .image_layout(vk::ImageLayout::GENERAL)
         .sampler(vk::Sampler::null());
     let descriptor_voxel_surface_index_image_view_info = vk::DescriptorImageInfo::default()
@@ -479,7 +673,7 @@ pub unsafe fn execute_voxel_tick_compute(
         .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
         .src_queue_family_index(queue_family_index)
         .dst_queue_family_index(queue_family_index)
-        .image(voxel_image)
+        .image(voxel_image.image)
         .subresource_range(subresource_range);
     let voxel_indices_image_write_to_read = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::GENERAL)
@@ -524,7 +718,7 @@ pub unsafe fn update_voxel(
     allocator: &mut Allocator,
     queue: vk::Queue,
     pool: vk::CommandPool,
-    voxel_image: vk::Image,
+    voxel_image: &VoxelImage,
     voxel: u8,
     position: vek::Vec3<u32>,
 ) {
@@ -582,7 +776,7 @@ pub unsafe fn update_voxel(
 
     let regions = [region];
     let copy_buffer_to_image_info = vk::CopyBufferToImageInfo2::default()
-        .dst_image(voxel_image)
+        .dst_image(voxel_image.image)
         .dst_image_layout(vk::ImageLayout::GENERAL)
         .regions(&regions)
         .src_buffer(src);

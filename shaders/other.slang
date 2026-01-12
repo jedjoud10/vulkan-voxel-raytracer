@@ -2,7 +2,7 @@
 #define OTHER
 #include <hash.slang>
 
-static const int SIZE = 256;
+static const int SIZE = 64;
 static const uint INVALID = 0x3FFFFFF;
 
 struct Voxel {
@@ -31,36 +31,33 @@ struct Voxel {
 }
 
 struct Fetcher {
-    RWTexture3D<uint8_t> voxels;
+    Texture3D<uint8_t> voxels;
 
     Voxel fetch(int3 position) {
         uint8_t raw = 0;
 
         if (all(position >= 0) && all(position < SIZE)) {
-            raw = voxels[position];
+            raw = voxels.Load(int4(position, 0));
         }
         
         return Voxel.from_raw(raw);
     }
 }
 
-bool dda(
-    RWTexture3D<uint8_t> voxels,
+bool dda<let N : int>(
+    Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
-    out uint iter,
 ) {
     float3 floored_pos = floor(ray_pos);
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-    Fetcher fetcher = Fetcher(voxels);
 
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < N; i++) {
         Voxel voxel = fetcher.fetch((int3)(floored_pos));
 
         if (voxel.active) {
-            iter = i;
             return true;
         }
 
@@ -70,14 +67,17 @@ bool dda(
         side_dist += dir_sign * eqs;
     }
 
-    iter = 16;
     return false;
 }
 
+float3 per_block_unique_colour(uint3 block_pos) {
+    float3 col = normalize(hash33(block_pos * float3(23.231, -435.4354, 9412.1)));
+    return lerp(col, 1.0, 0.8f);
+}
 
 // TODO: need to calculate how "close" we get to the surface...
 float3 dda_shadownate(
-    RWTexture3D<uint8_t> voxels,
+    Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
 ) {
@@ -85,14 +85,13 @@ float3 dda_shadownate(
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-    Fetcher fetcher = Fetcher(voxels);
     float3 color = 1.0;
 
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 64; i++) {
         Voxel voxel = fetcher.fetch((int3)(floored_pos));
 
         if (voxel.active && voxel.refractive) {
-            color *= normalize(hash33(floor(floored_pos) * float3(23.231, -435.4354, 9412.1)));
+            color *= per_block_unique_colour((uint3)floor(floored_pos));
         }
 
         if (voxel.active && !voxel.refractive) {
@@ -108,6 +107,14 @@ float3 dda_shadownate(
     return color;
 }
 
+public static const int3[] FACE_NORMALS = {
+    int3(1, 0, 0),
+    int3(-1, 0, 0),
+    int3(0, 1, 0),
+    int3(0, -1, 0),
+    int3(0, 0, 1),
+    int3(0, 0, -1),
+};
 
 float3 get_face_normal(int face, float3 sign) {
     return -(float3)(face == int3(0, 1, 2)) * sign;
@@ -126,14 +133,16 @@ int global_face(int face, float3 sign) {
 }
 
 static const uint8_t4[4 * 4] null_data = { uint8_t4(0, 0, 0, 0) };
-static const uint[4 * 4] null_data2 = { 0 };
+static const uint8_t1[16 * 16] null_data2 = { 0 };
 
 struct SurfaceData {
     uint8_t4[4 * 4] colors;
+    //uint8_t1[16 * 16] sky_visibility;
     //uint[4 * 4] colors2;
 
     __init() {
         colors = null_data;
+        //sky_visibility = null_data2;
         // colors2 = null_data2;
     }
 }

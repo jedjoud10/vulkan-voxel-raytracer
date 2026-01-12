@@ -62,6 +62,7 @@ impl<const N: usize> MultiComputePipeline<N> {
     }
 }
 
+pub type VoxelGeneratePipeline = MultiComputePipeline<2>;
 pub type VoxelTickPipeline = MultiComputePipeline<4>;
 
 pub unsafe fn create_render_compute_pipeline(
@@ -291,12 +292,61 @@ unsafe fn create_single_entry_point_pipeline(device: &ash::Device, binder: &Opti
     return SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
 }
 
-
 pub unsafe fn create_generate_voxel_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
     binder: &Option<ash::ext::debug_utils::Device>,
-) -> ComputePipeline {
+) -> VoxelGeneratePipeline {
+    let compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
+        .code(raw)
+        .flags(vk::ShaderModuleCreateFlags::empty());
+    let compute_shader_module = device
+        .create_shader_module(&compute_shader_module_create_info, None)
+        .unwrap();
+    crate::debug::set_object_name(compute_shader_module, binder, "generate voxel compute shader module");
+
+    let descriptor_set_layout_binding_voxel_image_base_level = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let descriptor_set_layout_binding_prev_mipmapped_voxels = vk::DescriptorSetLayoutBinding::default()
+        .binding(1)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let descriptor_set_layout_binding_next_mipmapped_voxels = vk::DescriptorSetLayoutBinding::default()
+        .binding(2)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+
+    let bindings = [
+        descriptor_set_layout_binding_voxel_image_base_level,
+        descriptor_set_layout_binding_prev_mipmapped_voxels,
+        descriptor_set_layout_binding_next_mipmapped_voxels
+    ];
+
+    let descriptor_set_test_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings);
+    
+    let compute_descriptor_test_set_layout = device
+        .create_descriptor_set_layout(&descriptor_set_test_layout_create_info, None)
+        .unwrap();
+
+    crate::debug::set_object_name(compute_descriptor_test_set_layout, binder, "generate voxel compute descriptor set layout");
+
+    let generate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout);
+    let propagate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "propagateMipMaps", compute_descriptor_test_set_layout);
+    
+    return MultiComputePipeline {
+        module: compute_shader_module,
+        descriptor_set_layout: compute_descriptor_test_set_layout,
+        entry_points: [generate_entry_point, propagate_entry_point]
+    }
+    
+    /*
     let compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)
         .flags(vk::ShaderModuleCreateFlags::empty());
@@ -352,4 +402,5 @@ pub unsafe fn create_generate_voxel_compute_pipeline(
         pipeline_layout: compute_pipeline_layout,
         pipeline: compute_pipelines[0]
     }
+    */
 }

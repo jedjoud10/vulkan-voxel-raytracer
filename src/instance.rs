@@ -16,7 +16,7 @@ pub unsafe fn create_instance(
     raw_display_handle: RawDisplayHandle,
 ) -> ash::Instance {
     let app_info = vk::ApplicationInfo::default()
-        .application_name(c"Test Vulkan App")
+        .application_name(c"Vulkan Voxel Raytracer")
         .api_version(vk::API_VERSION_1_3)
         .application_version(0)
         .engine_version(0)

@@ -17,18 +17,16 @@ float3 sky(float3 sun_dir, float3 ray_dir, bool extraLightEnabled = true) {
     float3 res = scatter(ray_start, ray_dir, normalize(sun_dir), planet.x) * 4 * dayTime;
 
     if (extraLightEnabled) {
-        float dayTime = 1;
         float sunSpot = max(dot(ray_dir, sun_dir), 0.0);
         float sunMask = pow(sunSpot, 64.0) * dayTime;
         float sun = max(0.0, smoothstep(0.5, 1.5, dot(ray_dir, sun_dir))) * 0.5;
         float sunDisc = smoothstep(0.9999, 0.999935, dot(ray_dir, sun_dir));
 
         res += sunDisc * dayTime;
-    }
 
-    
-    float starsIntensity = stars(ray_dir);
-    res += starsIntensity * night;
+        float starsIntensity = stars(ray_dir) * 0.3;
+        res += starsIntensity * night;
+    }
 
     return res;
 }
