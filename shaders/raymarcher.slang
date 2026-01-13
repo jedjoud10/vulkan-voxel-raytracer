@@ -28,6 +28,16 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
+
+    Fetcher fetcher = Fetcher(voxels);
+
+    int hit2 = traverse2(fetcher, ray_dir, ray_pos);
+
+    //output[id.xy] = float4(hit2 ? (tmp % 1) : 0.0, 0.0);
+    //output[id.xy] = float4(iterations / 8.0);
+    output[id.xy] = float4(hit2 / 32.0);
+    return;
+
     //ray_pos += ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
 
     float3 floored_pos = floor(ray_pos);
@@ -35,12 +45,8 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 dir_sign = sign(ray_dir);
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
 
-    Fetcher fetcher = Fetcher(voxels);
 
 
-    output[id.xy] = traverse(fetcher, ray_dir, ray_pos);
-    return;
-    
     float3 color = 0.0;
     bool hit = false;
     float3 tint = 1.0;
@@ -53,6 +59,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
     bool lastWasAir = true;
 
+    /*
     for (int i = 0; i < SIZE*2; i++) {
         Voxel voxel = fetcher.fetch((int3)floored_pos);
 
@@ -116,6 +123,11 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         floored_pos += dir_sign * eqs;
         side_dist += dir_sign * eqs;
     }
+    */
+
+    int iterations;
+    hit = traverse(fetcher, ray_dir, ray_pos, world, block_pos, block_uvs, face, iterations);
+    normal = get_face_normal(face, dir_sign);
 
     // either compute sky color or PBR color
     if (hit) {
@@ -183,6 +195,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
             pixels.z = 7 - pixels.z;
         }
     
+        //color = normal;
         normal = normalize(normal + (hash33(pixels * float3(4.5984, 43.2323, -0.1212)) - 0.5) * 0.05);
         float mixer = hash13(pixels * float3(123.321, 21.322, -32.321)) * 0.2 + 0.8;
     
@@ -211,6 +224,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
         PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
         CameraData camera_data = CameraData(-ray_dir);
         SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 0.8 : 0);
+        //color = normal;
         color = brdf(pbr_surface_data, camera_data, sun_data);
         //color = block_pos;
     } else {

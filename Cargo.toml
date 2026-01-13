@@ -1,5 +1,5 @@
 [package]
-name = "vulkan-testing"
+name = "vulkan-voxel-raytracer"
 version = "0.1.0"
 edition = "2021"
 

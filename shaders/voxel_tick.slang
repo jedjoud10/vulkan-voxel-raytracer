@@ -37,6 +37,7 @@ uint calculate_enabled_faces(uint3 id) {
     return enabled_faces;
 }
 
+static const bool DO_FANCY_STUFF = false;
 static const uint SHADOW_SAMPLES_PER_TICK = 32;
 static const float SHADOW_TEMPORAL_LERP_ACCUMULATOR_FACTOR = 8.0;
 static const bool SHADOW_TEMPORAL = false;
@@ -51,6 +52,10 @@ static const int SAMPLES = (SHADOW_USE_RANDOM_ANGLE_SPREAD ? SHADOW_SAMPLES_PER_
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void unwrap(uint3 id: SV_DispatchThreadID) {
+    if (!DO_FANCY_STUFF) {
+        return;
+    }
+    
     // skip if the block is empty or is reflective or refract
     Voxel self = Voxel.from_raw(voxels[id]);
     if (!self.active || self.reflective || self.refractive) {
@@ -87,6 +92,10 @@ void unwrap(uint3 id: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void unpack(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta_raw) {
+    if (!DO_FANCY_STUFF) {
+        return;
+    }
+
     // TREAT THIS AS -1 SINCE WE DO SOME BIT TWIDDLING AT THE END
     // Contains both the block index and enabled faces bitset
     uint packed_index = voxel_indices[id];
@@ -145,6 +154,10 @@ void copyDispatchSize(uint3 id: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(SHADOW_DISPATCH_GROUP_SIZE, 1, 1)]
 void main(uint3 id: SV_DispatchThreadID, uniform float4 forward, uniform float4 position, uniform float4 sun, uniform uint tick, uniform float delta) {
+    if (!DO_FANCY_STUFF) {
+        return;
+    }
+
     if (id.x >= visible_surfaces_counter[0].load(MemoryOrder.Relaxed)) {
         return;
     }

@@ -28,7 +28,8 @@ void main(uint3 id: SV_DispatchThreadID) {
     Voxel voxel;
     voxel.active = base < 0.0;
     voxel.reflective = false;
-    voxel.refractive = extra < 0.0;
+    voxel.refractive = false;
+    //voxel.refractive = extra < 0.0;
     voxels[id] = voxel.into_raw();
 }
 
@@ -42,13 +43,13 @@ void propagateMipMaps(uint3 id: SV_DispatchThreadID) {
 			for (int z = 0; z < 2; z++) {
                 uint3 pos = id * 2 + uint3(x, y, z);
                 bool is_full_voxel = (prev_mipmapped_voxels[pos] & 1) == 1;
-                bool was_propagated = (prev_mipmapped_voxels[pos] & 64) == 64;
+                bool was_propagated = (prev_mipmapped_voxels[pos] & 2) == 2;
                 has_voxels |= is_full_voxel || was_propagated;
             }
         }
     }
 
-    next_mipmapped_voxels[id] = (uint8_t1)(has_voxels ? 64 : 0);
+    next_mipmapped_voxels[id] = (uint8_t1)(has_voxels ? 2 : 0);
 }
 
 [shader("compute")]

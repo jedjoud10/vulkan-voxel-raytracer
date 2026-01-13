@@ -49,7 +49,7 @@ fn main() {
     let search_path = std::ffi::CString::new("shaders").unwrap();
 
     let session_options = slang::CompilerOptions::default()
-        .optimization(slang::OptimizationLevel::None)
+        .optimization(slang::OptimizationLevel::Maximal)
         .debug_information(slang::DebugInfoLevel::Maximal)
         .obfuscate(false)
         .no_mangle(true)
