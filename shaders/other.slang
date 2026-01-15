@@ -259,6 +259,107 @@ bool traverse(
     return false;
 }
 
+#include <queue.slang>
+
+struct QueueElem {
+    float16_t1 distance;
+    uint8_t1 level;
+}
+
+bool dda_multi_level_popped<let N : int>(
+    Fetcher fetcher,
+    float3 ray_dir,
+    float3 ray_pos,
+    QueueElem popped,
+    inout Queue<256, QueueElem> queue,
+    inout int iterations,
+    out float3 col,
+) {
+    int level = max(popped.level, 0);
+    int voxel_size = 1 << level;
+    ray_pos += ray_dir * (float)popped.distance;
+    ray_pos /= voxel_size;
+    float3 floored_pos = floor(ray_pos);
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
+
+    int face_local = 0;
+    for (int i = 0; i < N; i++) {
+        uint8_t raw = fetcher.fetch_raw((int3)(floored_pos), level);
+
+        if (raw != 0) {
+            float3 test = (floored_pos - ray_pos + 0.5 - 0.5 * dir_sign) * inv_dir;
+            float max = max3(test.x, test.y, test.z);
+            if (level > 4) {
+                queue.append(QueueElem(max*voxel_size, popped.level - 1));
+                iterations++;
+            } else {
+                col = fmod(max * voxel_size, 1.0);
+                return true;
+            }
+        }
+
+        float3 reconst = side_dist * inv_dir;
+        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
+        face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+        floored_pos += dir_sign * eqs;
+        side_dist += dir_sign * eqs;
+    }
+
+    return false;
+}
+
+int dda_traverse(   
+    Fetcher fetcher,
+    float3 ray_dir,
+    float3 ray_pos,
+    out float3 col,
+) {
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+
+    Queue<256, QueueElem> queue = Queue<256, QueueElem>();
+    queue.append(QueueElem(0, MIP_LEVELS-1));
+
+    int iterations = 0;
+    /*
+    dda_multi_level_popped<128>(fetcher, ray_dir, ray_pos, QueueElem(0, 0), queue, iterations, col);
+    return 0;
+*/
+    QueueElem popped;
+    while (queue.tryDequeue(popped)) {
+        bool hit = dda_multi_level_popped<32>(fetcher, ray_dir, ray_pos, popped, queue, iterations, col);
+        if (hit) {
+            return 0;
+        }
+
+        iterations++;
+    }
+
+    return iterations;
+    
+
+    /*
+    float3 floored_pos = floor(ray_pos);
+    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
+
+    for (int i = 0; i < N; i++) {
+        Voxel voxel = fetcher.fetch((int3)(floored_pos));
+
+        if (voxel.active) {
+            return true;
+        }
+
+        float3 reconst = side_dist * inv_dir;
+        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
+        floored_pos += dir_sign * eqs;
+        side_dist += dir_sign * eqs;
+    }
+
+    return false;*/
+}
+
 int traverse2(
     Fetcher fetcher,
     float3 ray_dir,
@@ -266,7 +367,7 @@ int traverse2(
 ) {
     //return ray_box_intersection(ray_dir, ray_pos, -3, 3) ? 1 : 0;
     float3 inv_dir = 1 / ray_dir;
-    Stack<12, uint> stack;
+    Stack<2, uint> stack;
     stack.append(Node(0, 0, 2).into_raw(), 0); // add the root node 
 
     uint raw_node;
