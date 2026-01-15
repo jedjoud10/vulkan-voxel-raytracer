@@ -1,8 +1,8 @@
 use std::{
     env,
-    fs::File,
+    fs::{self, DirEntry, File},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use slang::Downcast;
@@ -42,6 +42,20 @@ fn load_module(session: &mut slang::Session, file_name: &str) {
     println!("cargo:warning=Compiled! {length} bytes, saved to {path_str}");
 }
 
+// https://doc.rust-lang.org/nightly/std/fs/fn.read_dir.html#examples
+fn visit_dirs(dir: &Path, list: &mut Vec<DirEntry>) {
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().is_dir() {
+                visit_dirs(&entry.path(), list);
+            } else {
+                list.push(entry);
+            }
+        }
+    }
+}
+
 // TODO: optimize. this will re-compile all shaders, even if only one of them was modified
 fn main() {
     println!("cargo:rerun-if-changed=shaders");
@@ -59,7 +73,7 @@ fn main() {
     
     let target_desc = slang::TargetDesc::default().format(slang::CompileTarget::Spirv);
     let targets = [target_desc];
-    let search_paths = [search_path.as_ptr()];
+    let search_paths = [c"shaders".as_ptr(), c"shaders/noises".as_ptr()];
 
     let session_desc = slang::SessionDesc::default()
         .targets(&targets)
@@ -70,9 +84,10 @@ fn main() {
 
     let mut dir_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     dir_path.push("shaders");
-    let dir = std::fs::read_dir(dir_path).unwrap();
+    let mut entries = Vec::<DirEntry>::new();
+    visit_dirs(&dir_path, &mut entries);
 
-    for entry in dir.filter_map(|x| x.ok()) {
+    for entry in entries {
         let file_name = entry.file_name().into_string().unwrap();
         let file_name = file_name.split(".").next().unwrap();
         load_module(&mut session, file_name);

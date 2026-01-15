@@ -28,16 +28,20 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
 
     Fetcher fetcher = Fetcher(voxels);
 
+
+    /*
     float3 col = 0.0;
-    int hit2 = dda_traverse(fetcher, ray_dir, ray_pos, col);
+    int hit2 = 
 
     //output[id.xy] = float4(hit2 ? (tmp % 1) : 0.0, 0.0);
     //output[id.xy] = float4(iterations / 8.0);
-    output[id.xy] = float4((float)hit2 / 512.0);
-    //output[id.xy] = float4(col, 0) ;
+    //output[id.xy] = float4((float)hit2 / 512.0);
+    output[id.xy] = float4(col, 0) ;
     return;
 
     //ray_pos += ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
@@ -46,19 +50,24 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-
+    */
 
 
     float3 color = 0.0;
     bool hit = false;
     float3 tint = 1.0;
-    int face = 0;
+    
+    MultiLevelThingyOutput thingy;
+    hit = dda_traverse(fetcher, ray_dir, ray_pos, thingy);
+    
+    int face = thingy.face;
+    float3 world = thingy.world;
+    float3 normal = get_face_normal(thingy.face, dir_sign);
+    float3 block_uvs = thingy.block_uvs;
+    uint3 block_pos = thingy.block_pos;
 
-    float3 world;
-    float3 normal;
-    float3 block_uvs;
-    uint3 block_pos;
-
+    //output[id.xy] = float4(block_pos % 10 / 10.0, 0) ;
+    //return;
     bool lastWasAir = true;
 
     /*
@@ -127,9 +136,9 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     }
     */
 
-    int iterations;
-    hit = traverse(fetcher, ray_dir, ray_pos, world, block_pos, block_uvs, face, iterations);
-    normal = get_face_normal(face, dir_sign);
+    //int iterations;
+    //hit = traverse(fetcher, ray_dir, ray_pos, world, block_pos, block_uvs, face, iterations);
+    //normal = get_face_normal(face, dir_sign);
 
     // either compute sky color or PBR color
     if (hit) {
@@ -217,11 +226,12 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
         for (int k = 0; k < 8; k++) {
             float3 dir = normalize(sky_reflected_dir + (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0) * 0.2);
-            sky_visibility += dda<16>(fetcher, dir, world + dir * 0.1) ? 0 : 1;
+            sky_visibility += dda<8>(fetcher, dir, world + dir * 0.1) ? 0 : 1;
         }
 
         sky_visibility /= 8.0;
         */
+        
         
         PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
         CameraData camera_data = CameraData(-ray_dir);

@@ -1,5 +1,6 @@
 #include <other.slang>
 #include <octree.slang>
+#include <noises/noise3D.slang>
 
 [[vk::binding(0, 0)]]
 RWTexture3D<uint8_t> voxels;
@@ -18,6 +19,8 @@ RWStructuredBuffer<Node> octree;
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void main(uint3 id: SV_DispatchThreadID) {
+    float3 p = (float3)id;
+    
     float noisy = (noise((float2)id.xz * 0.1) * 10);
     float base = (float)id.y - 15.0;
     base += noisy * 0.5;
@@ -25,10 +28,16 @@ void main(uint3 id: SV_DispatchThreadID) {
     float extra = min(0, noise((float2)id.xz * 0.05) * 20);
     base += extra;
 
+    base += saturate(sin(snoise(p * 0.01) * 0.2)) * 90.5;
+    
+    float cave = max(snoise(p * 0.02), 0) * 1000;
+    base += cave;
+
     Voxel voxel;
     voxel.active = base < 0.0;
     voxel.reflective = false;
     voxel.refractive = false;
+    //voxel.type = cave < 0 ? Type.Grass : Type.Rock;
     //voxel.refractive = extra < 0.0;
     voxels[id] = voxel.into_raw();
 }

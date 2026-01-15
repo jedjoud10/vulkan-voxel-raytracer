@@ -18,11 +18,17 @@ public static const int3[] CHILDREN_OFFSETS = {
     int3(1, 1, 1),
 };
 
+enum Type: uint8_t {
+    Grass,
+    Rock,
+}
+
 struct Voxel {
     bool active;
     bool reflective;
     bool refractive;
     bool placed;
+    Type type;
 
     uint8_t into_raw() {
         uint8_t raw = 0;
@@ -30,6 +36,7 @@ struct Voxel {
         raw |= reflective ? 2 : 0;
         raw |= refractive ? 4 : 0;
         raw |= placed ? 8 : 0;
+        //raw |= (uint8_t)type << 4;
         return raw;
     }
 
@@ -39,6 +46,7 @@ struct Voxel {
         voxel.reflective = ((raw >> 1) & 1) == 1;
         voxel.refractive = ((raw >> 2) & 1) == 1;
         voxel.placed = ((raw >> 3) & 1) == 1;
+        //voxel.type = (Type)((raw >> 8) & 0xF);
         return voxel;
     }
 }
@@ -264,20 +272,34 @@ bool traverse(
 static const int LEVEL_DIFF = 3;
 static const int DDA_STEPS = 22;
 
+public struct MultiLevelThingyOutput {
+    public int face;
+    public float3 world;
+    public float3 block_uvs;
+    public uint3 block_pos;
+}
+
 // this function calls itself recursively
 // for some reason this performs decently compared to a queue 
 // probably cause of scratch buffer stuff, even though the asm code for the queue impl was much shorter than this recursive version
 // it makes sense though, octree are inherently recursive structures. you must traverse them recursively. traversing them using a queue is not a good idea 
-bool dda_multi_level_popped<let N : int, let K : int>(
+bool dda_multi_level<let N : int, let K : int>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
+    int3 box_min_bounds_world_space,
+    int3 box_max_bounds_world_space,
     float distance,
     inout int iterations,
-    out float3 col,
+    out MultiLevelThingyOutput output,
 ) {
     int voxel_size = 1 << max(K, 0);
-    float3 modified_ray_pos = (ray_pos + ray_dir * (distance)) / voxel_size;
+
+    int3 min_bounds_local_space = box_min_bounds_world_space / voxel_size;
+    int3 max_bounds_local_space = box_max_bounds_world_space / voxel_size;
+
+
+    float3 modified_ray_pos = (ray_pos + ray_dir * (distance - 0.01)) / voxel_size;
 
     /*
     uint3 sub_cell_start_pos = (uint3)floor((ray_pos + ray_dir * ((float)popped.distance + 1.5)) / voxel_size);
@@ -290,9 +312,12 @@ bool dda_multi_level_popped<let N : int, let K : int>(
     float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
 
     int face_local = 0;
-    col = 1;
     for (int i = 0; i < N; i++) {
         if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
+            break;
+        }
+
+        if (any((int3)(floored_pos) < (min_bounds_local_space - 1)) || any((int3)(floored_pos) > (max_bounds_local_space + 1))) {
             break;
         }
         
@@ -304,12 +329,19 @@ bool dda_multi_level_popped<let N : int, let K : int>(
             float dist = max3(test.x, test.y, test.z);
             if (K > 0) {
                 iterations++;
-                if (dda_multi_level_popped<N, K-LEVEL_DIFF>(fetcher, ray_dir, ray_pos, max(dist, 0), iterations, col)) {
+
+                int3 next_min_bounds_world_space = (int3)floored_pos * voxel_size;
+                int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
+
+                if (dda_multi_level<N, K-LEVEL_DIFF>(fetcher, ray_dir, ray_pos, next_min_bounds_world_space, next_max_bounds_world_space, max(dist, 0), iterations, output)) {
                     return true;
                 }
             } else {
-                //col = float3(0, 1, 0);
-                col = fmod(ray_pos + ray_dir * (dist - 0.001), 1);
+                // set output parameters
+                output.world = ray_pos + ray_dir * dist;
+                output.block_uvs = output.world - floored_pos;
+                output.face = face_local;
+                output.block_pos = (uint3)floored_pos;
                 return true;
             }
         }
@@ -331,21 +363,18 @@ bool dda_multi_level_popped<let N : int, let K : int>(
     return false;
 }
 
-int dda_traverse(   
+bool dda_traverse(   
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
-    out float3 col,
+    out MultiLevelThingyOutput output,
 ) {
     /*
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
     */
     int iterations = 0;
-    if (dda_multi_level_popped<DDA_STEPS, MIP_LEVELS - 1>(fetcher, ray_dir, ray_pos, 0, iterations, col)) {
-        return iterations;
-    }
-    return iterations;
+    return dda_multi_level<DDA_STEPS, MIP_LEVELS - 1>(fetcher, ray_dir, ray_pos, 0, SIZE, 0, iterations, output);
 }
 
 int traverse2(
