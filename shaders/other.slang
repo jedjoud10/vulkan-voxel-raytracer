@@ -59,7 +59,7 @@ struct Fetcher {
     uint8_t fetch_raw(int3 position, int level = 0) {
         uint8_t raw = 0;
 
-        if (all(position >= 0) && all(position < SIZE)) {
+        if (all(position >= 0) && all(position < (SIZE >> level))) {
             raw = voxels.Load(int4(position, level));
         }
         
@@ -262,50 +262,69 @@ bool traverse(
 #include <queue.slang>
 
 struct QueueElem {
-    float16_t1 distance;
+    uint8_t1 distance;
     uint8_t1 level;
 }
+
+static const int QUEUE_SIZE = 128;
 
 bool dda_multi_level_popped<let N : int>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
     QueueElem popped,
-    inout Queue<256, QueueElem> queue,
+    inout Queue<QUEUE_SIZE, QueueElem> queue,
     inout int iterations,
     out float3 col,
 ) {
     int level = max(popped.level, 0);
     int voxel_size = 1 << level;
-    ray_pos += ray_dir * (float)popped.distance;
-    ray_pos /= voxel_size;
-    float3 floored_pos = floor(ray_pos);
+    float3 modified_ray_pos = (ray_pos + ray_dir * ((float)popped.distance)) / voxel_size;
+
+    /*
+    uint3 sub_cell_start_pos = (uint3)floor((ray_pos + ray_dir * ((float)popped.distance + 1.5)) / voxel_size);
+    uint3 sub_cell_end_pos = sub_cell_start_pos + 1;
+    */
+
+    float3 floored_pos = floor(modified_ray_pos);
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
-    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
+    float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
 
     int face_local = 0;
+    col = 1;
     for (int i = 0; i < N; i++) {
+        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE << level))) {
+            break;
+        }
+        
         uint8_t raw = fetcher.fetch_raw((int3)(floored_pos), level);
 
         if (raw != 0) {
-            float3 test = (floored_pos - ray_pos + 0.5 - 0.5 * dir_sign) * inv_dir;
-            float max = max3(test.x, test.y, test.z);
-            if (level > 4) {
-                queue.append(QueueElem(max*voxel_size, popped.level - 1));
+            float3 test = (floored_pos * voxel_size - ray_pos + voxel_size * 0.5 - 0.5 * voxel_size * dir_sign) * inv_dir;
+            float dist = max3(test.x, test.y, test.z);
+            if (level > 0) {
+                uint8_t1 packed_distance = (uint8_t1)floor(max(dist, 0));
+                queue.append(QueueElem(packed_distance, popped.level - 4));
                 iterations++;
             } else {
-                col = fmod(max * voxel_size, 1.0);
+                col = fmod(ray_pos + ray_dir * (dist - 0.001), 1);
                 return true;
             }
         }
 
+        if ((raw & 4) == 4) {
+            break;
+        }
+
+        iterations++;
         float3 reconst = side_dist * inv_dir;
         int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
         face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
         floored_pos += dir_sign * eqs;
         side_dist += dir_sign * eqs;
     }
+    
 
     return false;
 }
@@ -319,7 +338,7 @@ int dda_traverse(
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
 
-    Queue<256, QueueElem> queue = Queue<256, QueueElem>();
+    Queue<QUEUE_SIZE, QueueElem> queue = Queue<QUEUE_SIZE, QueueElem>();
     queue.append(QueueElem(0, MIP_LEVELS-1));
 
     int iterations = 0;
@@ -329,12 +348,12 @@ int dda_traverse(
 */
     QueueElem popped;
     while (queue.tryDequeue(popped)) {
-        bool hit = dda_multi_level_popped<32>(fetcher, ray_dir, ray_pos, popped, queue, iterations, col);
+        bool hit = dda_multi_level_popped<46>(fetcher, ray_dir, ray_pos, popped, queue, iterations, col);
         if (hit) {
-            return 0;
+            return 10000;
         }
 
-        iterations++;
+        //iterations++;
     }
 
     return iterations;

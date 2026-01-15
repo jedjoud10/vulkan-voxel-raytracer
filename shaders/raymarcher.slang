@@ -31,13 +31,13 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
 
     Fetcher fetcher = Fetcher(voxels);
 
-    float3 col;
+    float3 col = 0.0;
     int hit2 = dda_traverse(fetcher, ray_dir, ray_pos, col);
 
     //output[id.xy] = float4(hit2 ? (tmp % 1) : 0.0, 0.0);
     //output[id.xy] = float4(iterations / 8.0);
-    output[id.xy] = float4(hit2 / 32.0);
-    //output[id.xy] = float4(col, 0);
+    //output[id.xy] = float4((float)hit2 / 128.0);
+    output[id.xy] = float4(col, 0) ;
     return;
 
     //ray_pos += ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
