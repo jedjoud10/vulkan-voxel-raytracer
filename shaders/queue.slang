@@ -14,7 +14,7 @@ struct Queue<let N: int, T> {
     [mutating]
     void append(T element) {
         if (length == N) {
-            printf("queue full");
+            // printf("queue full");
             return;
         }
 

@@ -261,25 +261,23 @@ bool traverse(
 
 #include <queue.slang>
 
-struct QueueElem {
-    uint8_t1 distance;
-    uint8_t1 level;
-}
+static const int LEVEL_DIFF = 3;
+static const int DDA_STEPS = 22;
 
-static const int QUEUE_SIZE = 128;
-
-bool dda_multi_level_popped<let N : int>(
+// this function calls itself recursively
+// for some reason this performs decently compared to a queue 
+// probably cause of scratch buffer stuff, even though the asm code for the queue impl was much shorter than this recursive version
+// it makes sense though, octree are inherently recursive structures. you must traverse them recursively. traversing them using a queue is not a good idea 
+bool dda_multi_level_popped<let N : int, let K : int>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
-    QueueElem popped,
-    inout Queue<QUEUE_SIZE, QueueElem> queue,
+    float distance,
     inout int iterations,
     out float3 col,
 ) {
-    int level = max(popped.level, 0);
-    int voxel_size = 1 << level;
-    float3 modified_ray_pos = (ray_pos + ray_dir * ((float)popped.distance)) / voxel_size;
+    int voxel_size = 1 << max(K, 0);
+    float3 modified_ray_pos = (ray_pos + ray_dir * (distance)) / voxel_size;
 
     /*
     uint3 sub_cell_start_pos = (uint3)floor((ray_pos + ray_dir * ((float)popped.distance + 1.5)) / voxel_size);
@@ -294,25 +292,29 @@ bool dda_multi_level_popped<let N : int>(
     int face_local = 0;
     col = 1;
     for (int i = 0; i < N; i++) {
-        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE << level))) {
+        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
             break;
         }
         
-        uint8_t raw = fetcher.fetch_raw((int3)(floored_pos), level);
+        uint8_t raw = fetcher.fetch_raw((int3)(floored_pos), max(K, 0));
 
+        // handle partially full nodes / leaf voxel nodes
         if (raw != 0) {
             float3 test = (floored_pos * voxel_size - ray_pos + voxel_size * 0.5 - 0.5 * voxel_size * dir_sign) * inv_dir;
             float dist = max3(test.x, test.y, test.z);
-            if (level > 0) {
-                uint8_t1 packed_distance = (uint8_t1)floor(max(dist, 0));
-                queue.append(QueueElem(packed_distance, popped.level - 4));
+            if (K > 0) {
                 iterations++;
+                if (dda_multi_level_popped<N, K-LEVEL_DIFF>(fetcher, ray_dir, ray_pos, max(dist, 0), iterations, col)) {
+                    return true;
+                }
             } else {
+                //col = float3(0, 1, 0);
                 col = fmod(ray_pos + ray_dir * (dist - 0.001), 1);
                 return true;
             }
         }
 
+        // skip completely full nodes
         if ((raw & 4) == 4) {
             break;
         }
@@ -335,48 +337,15 @@ int dda_traverse(
     float3 ray_pos,
     out float3 col,
 ) {
+    /*
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
-
-    Queue<QUEUE_SIZE, QueueElem> queue = Queue<QUEUE_SIZE, QueueElem>();
-    queue.append(QueueElem(0, MIP_LEVELS-1));
-
+    */
     int iterations = 0;
-    /*
-    dda_multi_level_popped<128>(fetcher, ray_dir, ray_pos, QueueElem(0, 0), queue, iterations, col);
-    return 0;
-*/
-    QueueElem popped;
-    while (queue.tryDequeue(popped)) {
-        bool hit = dda_multi_level_popped<46>(fetcher, ray_dir, ray_pos, popped, queue, iterations, col);
-        if (hit) {
-            return 10000;
-        }
-
-        //iterations++;
+    if (dda_multi_level_popped<DDA_STEPS, MIP_LEVELS - 1>(fetcher, ray_dir, ray_pos, 0, iterations, col)) {
+        return iterations;
     }
-
     return iterations;
-    
-
-    /*
-    float3 floored_pos = floor(ray_pos);
-    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-
-    for (int i = 0; i < N; i++) {
-        Voxel voxel = fetcher.fetch((int3)(floored_pos));
-
-        if (voxel.active) {
-            return true;
-        }
-
-        float3 reconst = side_dist * inv_dir;
-        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
-        floored_pos += dir_sign * eqs;
-        side_dist += dir_sign * eqs;
-    }
-
-    return false;*/
 }
 
 int traverse2(
