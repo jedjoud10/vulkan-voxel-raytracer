@@ -24,6 +24,10 @@ pub fn convert(inp: Vec<u8>) -> Vec<u32> {
 #[macro_export]
 macro_rules! asset {
     ($file:expr, $assets:expr) => {{
+        let bytes = include_bytes!(env!($file));
+        $assets.insert($file, convert(bytes.to_vec()));
+        log::info!("loading embedded asset '{}' from compile time...", $file);
+        /*
         cfg_if::cfg_if! {
             if #[cfg(debug_assertions)] {
                 {
@@ -36,5 +40,6 @@ macro_rules! asset {
                 log::info!("loading embedded asset '{}' from compile time...", $file);
             }
         }
+        */
     }};
 }

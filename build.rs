@@ -7,7 +7,7 @@ use std::{
 
 use slang::Downcast;
 
-fn load_module(session: &mut slang::Session, file_name: &str) {
+fn load_module(session: &slang::Session, file_name: &str) {
     let module = session.load_module(&format!("{file_name}.slang")).unwrap();
 
     if module.entry_point_count() == 0 {
@@ -60,7 +60,6 @@ fn visit_dirs(dir: &Path, list: &mut Vec<DirEntry>) {
 fn main() {
     println!("cargo:rerun-if-changed=shaders");
     let global_session = slang::GlobalSession::new().unwrap();
-    let search_path = std::ffi::CString::new("shaders").unwrap();
 
     let session_options = slang::CompilerOptions::default()
         .optimization(slang::OptimizationLevel::Maximal)
@@ -80,7 +79,7 @@ fn main() {
         .search_paths(&search_paths)
         .options(&session_options);
 
-    let mut session = global_session.create_session(&session_desc).unwrap();
+    let session = global_session.create_session(&session_desc).unwrap();
 
     let mut dir_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     dir_path.push("shaders");
@@ -90,6 +89,6 @@ fn main() {
     for entry in entries {
         let file_name = entry.file_name().into_string().unwrap();
         let file_name = file_name.split(".").next().unwrap();
-        load_module(&mut session, file_name);
+        load_module(&session, file_name);
     }
 }

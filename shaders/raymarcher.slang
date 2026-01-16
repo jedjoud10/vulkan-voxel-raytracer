@@ -1,3 +1,4 @@
+#language slang 2026
 #include <lighting.slang>
 #include <pbr.slang>
 
@@ -18,7 +19,7 @@ Texture3D<uint> voxels_indices;
 [SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = false;
 
 [shader("compute")]
-[numthreads(32, 32, 1)]
+[numthreads(16, 16, 1)]
 void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun) {
     float2 screen_uvs = (float2)id.xy / screen;
     screen_uvs *= 2.0;
@@ -57,17 +58,22 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     bool hit = false;
     float3 tint = 1.0;
     
-    MultiLevelThingyOutput thingy;
-    hit = dda_traverse(fetcher, ray_dir, ray_pos, thingy);
+    MultiLevelThingyOutput<true, true, true> thingy;
+    TraceStats stats;
+    hit = dda_traverse<true, true, true>(fetcher, ray_dir, ray_pos, thingy, stats);
     
-    int face = thingy.face;
-    float3 world = thingy.world;
-    float3 normal = get_face_normal(thingy.face, dir_sign);
-    float3 block_uvs = thingy.block_uvs;
-    uint3 block_pos = thingy.block_pos;
+    int face = (int)thingy.face.get().value;
+    float3 world = thingy.world.get().value;
+    float3 normal = get_face_normal(face, dir_sign);
+    uint3 block_pos = (uint3)thingy.block_pos.get().value;
+    float3 block_uvs = world - block_pos;
 
-    //output[id.xy] = float4(block_pos % 10 / 10.0, 0) ;
-    //return;
+    //output[id.xy] = float4(stats.full_halts / 8.0);
+    int diff = WaveActiveSum(stats.total_iterations) / 64.0;
+    //output[id.xy] = float4(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0, 0);
+    output[id.xy] = float4(diff / 64.0);
+    return;
+    
     bool lastWasAir = true;
 
     /*

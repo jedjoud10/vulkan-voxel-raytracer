@@ -231,11 +231,11 @@ impl InternalApp {
         const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
         const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
 
-        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer");
         let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
+        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer");
         let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDIRECT_BUFFER);
+        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer");
 
 
         voxel::generate_voxel_image(
@@ -553,8 +553,8 @@ impl InternalApp {
         let size = vek::Vec2::<u32>::new(size.width, size.height)
             .map(|val| val / swapchain::SCALING_FACTOR);
 
-        let width_group_size = (size.x as f32 / 32f32).ceil() as u32;
-        let height_group_size = (size.y as f32 / 32f32).ceil() as u32;
+        let width_group_size = (size.x as f32 / 16f32).ceil() as u32;
+        let height_group_size = (size.y as f32 / 16f32).ceil() as u32;
 
         let size = size.map(|x| x as f32);
 

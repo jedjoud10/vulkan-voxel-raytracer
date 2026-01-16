@@ -4,11 +4,17 @@ use ash::vk;
 use raw_window_handle::RawDisplayHandle;
 
 const REQUIRED_INSTANCE_EXTENSIONS: &'static [&'static CStr] =
-    &[ash::ext::debug_utils::NAME, ash::khr::surface::NAME, ash::ext::validation_features::NAME];
+    &[
+        //#[cfg(debug_assertions)]
+        //ash::ext::debug_utils::NAME,
+        //#[cfg(debug_assertions)]
+        //ash::ext::validation_features::NAME,
+        ash::khr::surface::NAME,
+    ];
 
 const REQUIRED_INSTANCE_VALIDATION_LAYERS: &'static [&'static CStr] = &[
-    #[cfg(debug_assertions)]
-    c"VK_LAYER_KHRONOS_validation",
+    //#[cfg(debug_assertions)]
+    //c"VK_LAYER_KHRONOS_validation",
 ];
 
 pub unsafe fn create_instance(
@@ -34,8 +40,8 @@ pub unsafe fn create_instance(
         .collect::<Vec<_>>();
 
     let enabled_validation_features = [
-        #[cfg(debug_assertions)]
-        vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,
+        //#[cfg(debug_assertions)]
+        //vk::ValidationFeatureEnableEXT::DEBUG_PRINTF,
     ];
     let mut validation_features = ash::vk::ValidationFeaturesEXT::default()
         .enabled_validation_features(&enabled_validation_features);

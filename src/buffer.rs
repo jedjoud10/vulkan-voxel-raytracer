@@ -22,11 +22,10 @@ pub unsafe fn create_buffer(
     size: usize,
     binder: &Option<ash::ext::debug_utils::Device>,
     name: &str,
-    usage: vk::BufferUsageFlags,
 ) -> Buffer {
     let buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
-        .usage(usage)
+        .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .size(size as u64);
     let buffer = device.create_buffer(&buffer_create_info, None).unwrap();
@@ -67,5 +66,5 @@ pub unsafe fn create_counter_buffer(
     binder: &Option<ash::ext::debug_utils::Device>,
     name: &str,
 ) -> Buffer {
-    create_buffer(device, allocator, size_of::<u32>(), binder, name, vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC)
+    create_buffer(device, allocator, size_of::<u32>(), binder, name)
 }

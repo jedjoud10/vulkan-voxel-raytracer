@@ -30,8 +30,10 @@ void main(uint3 id: SV_DispatchThreadID) {
 
     base += saturate(sin(snoise(p * 0.01) * 0.2)) * 90.5;
     
-    float cave = max(snoise(p * 0.02), 0) * 1000;
+    /*
+    float cave = sign(-snoise(p * 0.02) + 0.8) * 1000;
     base += cave;
+    */
 
     Voxel voxel;
     voxel.active = base < 0.0;
@@ -67,14 +69,4 @@ void propagateMipMaps(uint3 id: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void generateOctree(uint3 id: SV_DispatchThreadID) {
-    float noisy = (noise((float2)id.xz * 0.1) * 10);
-    float base = (float)id.y - 15.0;
-    base += noisy * 0.5;
-    base += min(0, noise((float2)id.xz * 0.05) * 20);
-
-    Voxel voxel;
-    voxel.active = base < 0.0;
-    voxel.reflective = false;
-    voxel.refractive = false;
-    voxels[id] = voxel.into_raw();
 }
