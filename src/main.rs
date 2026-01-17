@@ -131,8 +131,17 @@ impl InternalApp {
             .filter_map(|(a, b)| b.map(|val| (a, val)))
             .collect::<Vec<(vk::PhysicalDevice, u32)>>();
         physical_device_candidates.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        if (physical_device_candidates.is_empty()) {
+            log::error!("no physical device was chosen!");
+        }
+
         let physical_device = physical_device_candidates[0].0;
-        log::info!("selected physical device");
+        let mut physical_device_properties = vk::PhysicalDeviceProperties2::default();
+        instance.get_physical_device_properties2(physical_device, &mut physical_device_properties);
+        let physical_device_name = physical_device_properties.properties.device_name_as_c_str().unwrap().to_str().unwrap();
+
+        log::info!("selected physical device \"{}\"", physical_device_name);
 
         let (device, queue_family_index, queue) = device::create_device_and_queue(
             &instance,

@@ -2,45 +2,14 @@
 #define OTHER
 #include <hash.slang>
 #include <queue.slang>
+#include <stack.slang>
+#include <octree.slang>
+#include <voxel.slang>
 
-
-static const int MIP_LEVELS = 8;
+static const int MIP_LEVELS = 6;
 static const int SIZE = 1 << (MIP_LEVELS-1);
 static const uint INVALID = 0x3FFFFFF;
 
-
-enum Type: uint8_t {
-    Grass,
-    Rock,
-}
-
-struct Voxel {
-    bool active;
-    bool reflective;
-    bool refractive;
-    bool placed;
-    Type type;
-
-    uint8_t into_raw() {
-        uint8_t raw = 0;
-        raw |= active ? 1 : 0;
-        raw |= reflective ? 2 : 0;
-        raw |= refractive ? 4 : 0;
-        raw |= placed ? 8 : 0;
-        //raw |= (uint8_t)type << 4;
-        return raw;
-    }
-
-    static Voxel from_raw(uint8_t raw) {
-        Voxel voxel;
-        voxel.active = (raw & 1) == 1;
-        voxel.reflective = ((raw >> 1) & 1) == 1;
-        voxel.refractive = ((raw >> 2) & 1) == 1;
-        voxel.placed = ((raw >> 3) & 1) == 1;
-        //voxel.type = (Type)((raw >> 8) & 0xF);
-        return voxel;
-    }
-}
 
 struct Fetcher {
     Texture3D<uint8_t> voxels;
@@ -89,7 +58,7 @@ public struct TraceStats {
 // for some reason this performs decently compared to a queue 
 // probably cause of scratch buffer stuff, even though the asm code for the queue impl was much shorter than this recursive version
 // it makes sense though, octree are inherently recursive structures. you must traverse them recursively. traversing them using a queue is not a good idea 
-bool dda_multi_level<let N : int, let K : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
+bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
@@ -118,7 +87,7 @@ bool dda_multi_level<let N : int, let K : int, let hasFace : bool, let hasWorld 
     float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
 
     int face_local = 0;
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < DDA_STEPS; i++) {
         // skip if we are outside the bounds of the map
         if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
             break;
@@ -157,7 +126,7 @@ bool dda_multi_level<let N : int, let K : int, let hasFace : bool, let hasWorld 
                 int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
 
 
-                if (dda_multi_level<N, K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, next_min_bounds_world_space, next_max_bounds_world_space, inv_dir, dir_sign, max(dist, 0), stats, output)) {
+                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, next_min_bounds_world_space, next_max_bounds_world_space, inv_dir, dir_sign, max(dist, 0), stats, output)) {
                     return true;
                 }
             } else {
@@ -185,6 +154,114 @@ bool dda_multi_level<let N : int, let K : int, let hasFace : bool, let hasWorld 
     return false;
 }
 
+// this will traverse using DDA through a specific node
+bool dda_stackful<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
+    Fetcher fetcher,
+    float3 ray_dir,
+    float3 ray_pos,
+    float3 inv_dir,
+    float3 dir_sign,
+    inout TraceStats stats,
+    Node popped,
+    inout Stack<64, PackedNode> stack,
+    out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
+) {
+    int depth_level = min(popped.depth_level, MIP_LEVELS - 1);
+    int voxel_size = SIZE >> depth_level;
+
+    //float3 modified_ray_pos = (ray_pos + ray_dir * (distance - 0.01)) / voxel_size;
+    float3 modified_ray_pos = ray_pos;
+
+    float3 floored_pos = floor(modified_ray_pos);
+    float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
+
+    int face_local = 0;
+
+    // stack used to reverse the ordering of the visited nodes, since we need to visit them from closest to furthest
+    Stack<DDA_STEPS, PackedNode> localReverseStack = Stack<DDA_STEPS, PackedNode>();
+
+    for (int i = 0; i < DDA_STEPS; i++) {
+        /*
+        // skip if we are outside the bounds of the map
+        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
+            break;
+        }
+        */
+
+        /*
+        // skip if we are outside the bounds of the parent
+        if (any((int3)(floored_pos) < (min_bounds_local_space - 1)) || any((int3)(floored_pos) > (max_bounds_local_space + 1))) {
+            break;
+        }
+        */
+        uint8_t raw = fetcher.fetch_raw((int3)(floored_pos), MIP_LEVELS - 1 - depth_level);
+
+        if (raw != 0) {
+            stats.total_iterations = 10;
+            return true;
+        }
+
+        /*
+        // handle partially full nodes / leaf voxel nodes
+        if (raw != 0) {
+            float3 test = (floored_pos * voxel_size - ray_pos + voxel_size * 0.5 - 0.5 * voxel_size * dir_sign) * inv_dir;
+            float dist = max3(test.x, test.y, test.z);
+
+            // completely full nodes are well, completely full. we can do the leaf-level logic since we know we can skip them
+            if ((raw & 4) == 4) {
+                stats.full_halts++;
+            
+                // set output parameters
+                float3 w = ray_pos + ray_dir * dist;
+                output.world = w;
+                output.face = face_local;
+                output.block_pos = (uint3)floor(w + ray_dir * 0.02);
+                
+                return true;
+            }
+
+            // check if we reached a leaf node
+            if (depth_level >= MIP_LEVELS - 1) {
+                // set output parameters
+                output.world = ray_pos + ray_dir * dist;
+                output.face = face_local;
+                output.block_pos = (uint3)floored_pos;
+                
+                return true;
+            } else {
+                stats.recursions++;
+
+                // encode the node
+                PackedNode packed = Node((uint3)floored_pos, depth_level + LEVEL_DIFF).into_raw();
+                
+                // add this node to the stack since we must visit it...
+                localReverseStack.append(packed);
+            }
+        }
+        */
+
+
+
+        stats.total_iterations++;
+        float3 reconst = side_dist * inv_dir;
+        bool3 t = min3(reconst.x, reconst.y, reconst.z) == reconst;
+        int3 eqs = select(t, 1, 0);
+        face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+        floored_pos += select(t, dir_sign, 0);
+        side_dist += select(t, dir_sign, 0);
+    }
+
+    /*
+    // pop from the local stack and add to main stack, (reverse the local elements)
+    PackedNode t;
+    while (localReverseStack.tryDequeue(t)) {
+        stack.append(t);
+    }
+    */
+
+    return false;
+}
+
 bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(   
     Fetcher fetcher,
     float3 ray_dir,
@@ -195,7 +272,41 @@ bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     stats = TraceStats(0, 0, 0);
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
-    return dda_multi_level<DDA_STEPS, MIP_LEVELS - 1, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, 0, SIZE, inv_dir, dir_sign, 0, stats, output);
+    return dda_multi_level<MIP_LEVELS - 1, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, 0, SIZE, inv_dir, dir_sign, 0, stats, output);
+}
+
+bool dda_traverse2<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(   
+    Fetcher fetcher,
+    float3 ray_dir,
+    float3 ray_pos,
+    out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
+    out TraceStats stats,
+) {
+    stats = TraceStats(0, 0, 0);
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+
+    Stack<64, PackedNode> stack = Stack<64, PackedNode>();
+    stack.append(Node(0, 0).into_raw());
+
+    if (dda_stackful<hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, stats, Node(0, 0), stack, output)) {
+        return true;
+    }
+
+    return false;
+    /*
+
+    PackedNode raw;
+    while (stack.tryDequeue(raw)) {
+        Node popped = Node.from_raw(raw);
+        if (dda_stackful<hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, stats, popped, stack, output)) {
+            return true;
+        }
+    }
+
+    return false;
+    //return dda_multi_level<MIP_LEVELS - 1, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, 0, SIZE, inv_dir, dir_sign, 0, stats, output);
+    */
 }
 
 

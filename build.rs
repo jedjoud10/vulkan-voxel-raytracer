@@ -39,7 +39,7 @@ fn load_module(session: &slang::Session, file_name: &str) {
 
     let path_str = path.to_str().unwrap();
     println!("cargo:rustc-env={file_name}.spv={path_str}");
-    println!("cargo:warning=Compiled! {length} bytes, saved to {path_str}");
+    println!("cargo:warning={file_name} compiled to {length} bytes");
 }
 
 // https://doc.rust-lang.org/nightly/std/fs/fn.read_dir.html#examples

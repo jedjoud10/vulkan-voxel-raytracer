@@ -5,7 +5,7 @@ use gpu_allocator::vulkan::{Allocation, Allocator};
 
 use crate::pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline};
 
-pub const MIP_LEVELS: usize = 8;
+pub const MIP_LEVELS: usize = 6;
 pub const SIZE: u32 = 1 << ((MIP_LEVELS-1) as u32);
 pub const _SIZE: usize = SIZE as usize;
 

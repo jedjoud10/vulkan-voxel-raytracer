@@ -18,9 +18,16 @@ Texture3D<uint> voxels_indices;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
 [SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = false;
 
+groupshared uint data;
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun) {
+void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun) {
+    if (all(lid.xy == 0)) {
+        data = 0;
+    }
+    GroupMemoryBarrier();
+    
     float2 screen_uvs = (float2)id.xy / screen;
     screen_uvs *= 2.0;
     screen_uvs -= 1.0;
@@ -60,7 +67,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     
     MultiLevelThingyOutput<true, true, true> thingy;
     TraceStats stats;
-    hit = dda_traverse<true, true, true>(fetcher, ray_dir, ray_pos, thingy, stats);
+    hit = dda_traverse2<true, true, true>(fetcher, ray_dir, ray_pos, thingy, stats);
     
     int face = (int)thingy.face.get().value;
     float3 world = thingy.world.get().value;
@@ -68,10 +75,19 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     uint3 block_pos = (uint3)thingy.block_pos.get().value;
     float3 block_uvs = world - block_pos;
 
+    /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
-    int diff = WaveActiveSum(stats.total_iterations) / 64.0;
+    GroupMemoryBarrierWithGroupSync();
+    InterlockedMax(data, stats.total_iterations);
+    GroupMemoryBarrierWithGroupSync();
+
+    int diff = data;
+    //int diff = WaveActiveSum(stats.total_iterations) / 64.0;
     //output[id.xy] = float4(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0, 0);
     output[id.xy] = float4(diff / 64.0);
+    */
+    //output[id.xy] = float4(stats.total_iterations / 64.0);
+    output[id.xy] = float4(hit ? 1 : 0);
     return;
     
     bool lastWasAir = true;

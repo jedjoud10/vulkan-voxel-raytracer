@@ -1,6 +1,39 @@
 
 public struct Stack<let N: int, T> {
     T[N] elements;
+    uint length;
+
+    __init() {
+        length = 0;
+    }
+
+    [mutating]
+    void append(T element) {
+        if (length == N) {
+            //printf("cannot append to stack. stack full. length=%i", length);
+            return;
+        }
+
+        elements[length] = element;
+        length++;
+    }
+
+    [mutating]
+    bool tryDequeue(out T element) {
+        if (length == 0) {
+            return false;
+        }
+
+        element = elements[length-1];
+        length--;
+        return true;
+    }
+}
+
+
+
+public struct SortedDistancesStack<let N: int, T> {
+    T[N] elements;
     half[N] distances;
     uint length;
 

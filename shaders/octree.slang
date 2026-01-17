@@ -1,18 +1,6 @@
 #ifndef OCTREE
 #define OCTREE
 
-/*
-public static const int3[] CHILDREN_OFFSETS = {
-    int3(0, 0, 0),
-    int3(1, 0, 0),
-    int3(0, 0, 1),
-    int3(1, 0, 1),
-    int3(0, 1, 0),
-    int3(1, 1, 0),
-    int3(0, 1, 1),
-    int3(1, 1, 1),
-};
-
 
 // https://tavianator.com/2022/ray_box_boundary.html
 bool ray_box_intersection(
@@ -39,35 +27,48 @@ bool ray_box_intersection(
 }
 
 struct Node {
+    // position. between zero and SIZE
     uint3 position;
-    uint depth_level; // we only need a few bits for this, no more than 3-4
-    uint8_t1 value; // we only use 1 bit of this
 
-    uint into_raw() {
+    // represented by 4 bits, so range is [0..15]
+    // depth of the root node is zero
+    uint depth_level;
+
+    PackedNode into_raw() {
         // pack the position in the first 3 bytes
         // which means that max map/chunk size IS limited to 256. oh well
         // needs chunking!
         uint packed = position.x & 0xFF | ((position.y & 0xFF) << 8) | ((position.z & 0xFF) << 16);
 
-        // pack the depth level as well. 6 bits
-        packed |= (depth_level & 0b111111) << 24;
-
-        // two bits that tells us if the node is a node contains matter 
-        // first bit is used for leaf voxels (ones at level 0) to see if they are "active" or not
-        // second bit is the "propagated" bit. gets set whenever a parent node has valid children that we must traverse through as well.
-        packed |= ((uint)value & 0b11) << 30;
+        // pack the depth level as well. 4 bits
+        packed |= (depth_level & 0b1111) << 22;
 
         return packed;
     }
 
-    static Node from_raw(uint raw) {
+    static Node from_raw(PackedNode raw) {
         Node node;
         node.position = uint3(raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF);
-        node.depth_level = (raw >> 24) & 0b111111;
-        node.value = (uint8_t1)((raw >> 30) & 0b11);
+        node.depth_level = (raw >> 22) & 0b1111;
         return node;
     }
 }
+
+typealias PackedNode = uint;
+
+/*
+public static const int3[] CHILDREN_OFFSETS = {
+    int3(0, 0, 0),
+    int3(1, 0, 0),
+    int3(0, 0, 1),
+    int3(1, 0, 1),
+    int3(0, 1, 0),
+    int3(1, 1, 0),
+    int3(0, 1, 1),
+    int3(1, 1, 1),
+};
+
+
 
 bool traverse(
     Fetcher fetcher,

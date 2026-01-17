@@ -30,8 +30,10 @@ pub(super) unsafe fn get_physical_device_score(
 
     let mut score = 0;
 
+    let min = surface_capabilities.min_image_count;
+    let max = surface_capabilities.max_image_count;
     let double_buffering_supported = surface_capabilities.min_image_count >= 2;
-    log::info!("double buffering: {double_buffering_supported}");
+    log::info!("double buffering: {double_buffering_supported}. min image count: {min}, max image count: {max}");
 
     let present_modes_supported = present_modes
         .iter()
