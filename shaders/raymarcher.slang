@@ -83,11 +83,12 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
 
     int diff = data;
     //int diff = WaveActiveSum(stats.total_iterations) / 64.0;
-    //output[id.xy] = float4(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0, 0);
     output[id.xy] = float4(diff / 64.0);
     */
-    //output[id.xy] = float4(stats.total_iterations / 64.0);
-    output[id.xy] = float4(hit ? 1 : 0);
+    //output[id.xy] = float4(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0, 0);
+    output[id.xy] = float4((stats.recursions) / 64.0);
+    //output[id.xy] = float4(hit ? 1 : 0);
+    //output[id.xy] = float4(world % 10 / 10.0, 0);
     return;
     
     bool lastWasAir = true;

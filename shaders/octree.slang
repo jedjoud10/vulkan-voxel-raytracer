@@ -26,7 +26,13 @@ bool ray_box_intersection(
     return tmin < tmax;
 }
 
+typealias PackedNode = Node;
+
 struct Node {
+    static Node root(int size) {
+        return Node(0, 0, 0, 0, size);
+    }
+
     // position. between zero and SIZE
     uint3 position;
 
@@ -34,27 +40,47 @@ struct Node {
     // depth of the root node is zero
     uint depth_level;
 
+    // distance that we can safely "skip" over to reach the node. always an lower bound to the actual distance
+    // this is scaled by the voxel size of this node's voxel size
+    // this is a value in the range [0..1]
+    float distance;
+
+    uint8_t3 next_min_bounds_world_space;
+    uint8_t3 next_max_bounds_world_space;
+
     PackedNode into_raw() {
+        return this;
+        /*
         // pack the position in the first 3 bytes
         // which means that max map/chunk size IS limited to 256. oh well
         // needs chunking!
-        uint packed = position.x & 0xFF | ((position.y & 0xFF) << 8) | ((position.z & 0xFF) << 16);
+        PackedNode packed = position.x & 0xFF | ((position.y & 0xFF) << 8) | ((position.z & 0xFF) << 16);
 
         // pack the depth level as well. 4 bits
-        packed |= (depth_level & 0b1111) << 22;
+        packed |= (depth_level & 0b1111) << 24;
+
+        // pack distance
+        uint clamped = (uint)clamp(ceil(distance * 15), 0, 15);
+        packed |= (clamped & 0b1111) << 28;
 
         return packed;
+        */
     }
 
     static Node from_raw(PackedNode raw) {
+        return raw;
+        /*
         Node node;
         node.position = uint3(raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF);
-        node.depth_level = (raw >> 22) & 0b1111;
+        node.depth_level = (raw >> 24) & 0b1111;
+        node.distance = ((raw >> 28) & 0b1111) / 15.0;
         return node;
+        */
     }
+
 }
 
-typealias PackedNode = uint;
+
 
 /*
 public static const int3[] CHILDREN_OFFSETS = {
