@@ -22,6 +22,10 @@
     - *Tip For Shadows*: At far enough distances, the per-voxel face texels will occupy less than one pixel on the screen. This means that it would be cheaper to do shadows for *each pixel*, instead of for *each voxel face texel*. 
 - Implement *octree* / *BHV* as a basic acceleration structure.
     - I have tried before to implement *octrees* with DDA and have failed. Maybe this time it will work
+    - Got it working through multiple implementations:
+        - Naive Octree Traversal: Just checks each node's 8 children using an AABB test...
+        - DDA Recursive (stackless): Uses DDA to speed things up and recurses by calling the function itself. **Fastest one so far**
+        - DDA Recursive (stack): Uses DDA to speed things up and stores results in an intermediate stack to be handled next iteration.
 - Experiment with dedicated Raytracing extensions. Maybe we could speed things up by using RT acceleration structures / queries?
 - Implement a way to invoke multiple rays from the same ray. Will be implemented like this:
     1. Start with 1 ray, starting at the camera, at the specificed direction from screen-space UVs

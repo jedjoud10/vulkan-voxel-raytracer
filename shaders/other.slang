@@ -62,8 +62,8 @@ struct Leaf {
 //   |-  leaf 5
 //   |-  ... 
 
-static const uint8_t LEVEL_DIFF = 2;
-static const uint8_t DDA_STEPS = 12;
+static const uint8_t LEVEL_DIFF = 4;
+static const uint8_t DDA_STEPS = 24;
 
 public struct MultiLevelThingyOutput<bool hasFace, bool hasWorld, bool hasBlockPos>  {
     public Conditional<int, hasFace> face;
@@ -119,7 +119,7 @@ bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let h
         }
 
         // skip if we are outside the bounds of the parent
-        if (any((int3)(floored_pos) < (min_bounds_local_space - 1)) || any((int3)(floored_pos) > (max_bounds_local_space + 1))) {
+        if (any((int3)(floored_pos) < (min_bounds_local_space - 1)) || any((int3)(floored_pos) >= (max_bounds_local_space + 1))) {
             break;
         }
         
@@ -179,7 +179,7 @@ bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let h
     return false;
 }
 
-const static int STACK_SIZE = 28;
+const static int STACK_SIZE = 32;
 
 groupshared PackedNode[16*16*STACK_SIZE] stacks;
 
@@ -202,15 +202,16 @@ bool dda_stackful<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     uint8_t depth_level = popped.depth_level;
     uint8_t voxel_size = (uint8_t)SIZE >> depth_level;
 
-    uint8_t global_distance = popped.distance;
+    uint8_t global_distance = popped.distance * voxel_size;
     float3 modified_ray_pos = (ray_pos + ray_dir * max(global_distance + 0.04, 0)) / voxel_size;
 
-    half3 floored_pos = floor((half3)modified_ray_pos);
-    half3 side_dist = (floored_pos - (half3)modified_ray_pos + (half)0.5 + copysign((half)0.5, dir_sign));
+    float3 floored_pos = floor((float3)modified_ray_pos);
+    float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + copysign(0.5, dir_sign));
 
     // stack used to reverse the ordering of the visited nodes, since we need to visit them from closest to furthest
-    Stack<4, uint8_t> local_reverse_stack = Stack<4, uint8_t>();
+    Stack<12, uint8_t> local_reverse_stack = Stack<12, uint8_t>();
     uint8_t local_stack_length = 0;
+    half dist = 0;
 
     [loop]
     for (uint8_t i = 0; i < DDA_STEPS; i++) {
@@ -229,16 +230,14 @@ bool dda_stackful<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
 
         // handle partially full nodes / leaf voxel nodes
         if (raw != 0) {
-            half3 test = (floored_pos * (half)voxel_size - (half3)ray_pos + (half)voxel_size * (half)0.5 - copysign((half)0.5 * (half)voxel_size, dir_sign)) * inv_dir;
-            half dist = max3(test.x, test.y, test.z);
 
             // check if we reached a leaf node
             if (depth_level >= MIP_LEVELS - 1) {
                 // set output parameter
-                closest_distance = (half)dist;
+                closest_distance = (half)dist - 1;
                 return true;
             } else {
-                local_reverse_stack.append((uint8_t1)floor(max(dist - 0.5, 0)));
+                local_reverse_stack.append((uint8_t1)floor(max(dist - 1 - 0.5, 0)));
             }
 
             // we know we can't trace *after* completely full nodes, so we can stop here
@@ -422,7 +421,7 @@ bool dda<let N : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
         face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
         floored_pos += dir_sign * eqs;
         side_dist += dir_sign * eqs;
-        stats.last_level_raw_dd += 1;
+        stats.total_iterations += 1;
     }
 
     return false;
@@ -445,9 +444,14 @@ float3 dda_shadownate(
     float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
     float3 color = 1.0;
 
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 512; i++) {
         Voxel voxel = fetcher.fetch((int3)(floored_pos));
 
+        if (voxel.active) {
+            return 1.0;
+        }
+
+        /*
         if (voxel.active && voxel.refractive) {
             color *= per_block_unique_colour((uint3)floor(floored_pos));
         }
@@ -455,6 +459,7 @@ float3 dda_shadownate(
         if (voxel.active && !voxel.refractive) {
             return 0.0;
         }
+        */
 
         float3 reconst = side_dist * inv_dir;
         int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
@@ -462,7 +467,7 @@ float3 dda_shadownate(
         side_dist += dir_sign * eqs;
     }
 
-    return color;
+    return 0.0;
 }
 
 public static const int3[] FACE_NORMALS = {

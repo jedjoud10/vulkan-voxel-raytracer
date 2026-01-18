@@ -31,7 +31,7 @@ groupshared uint max_clock;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
+void main(uint3 id: SV_DispatchThreadID, uint8_t3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
     if (all(lid.xy == 0)) {
         max_clock = 0;
         min_clock = 0xFFFFFFFF;
@@ -43,7 +43,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     screen_uvs -= 1.0;
     screen_uvs.y = -screen_uvs.y;
     screen_uvs.x = -screen_uvs.x;
-
+    
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
     
@@ -51,9 +51,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     //return;
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
-
+    
     Fetcher fetcher = Fetcher(voxels);
-
+    //output[id.xy] = float4(dda_shadownate(fetcher, ray_dir, ray_pos), 0);
+    //return;
 
 
     /*
@@ -79,9 +80,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     bool hit = false;
     float3 tint = 1.0;
     
-    //MultiLevelThingyOutput<true, true, true> thingy;
+    MultiLevelThingyOutput<true, true, true> thingy;
     TraceStats stats;
-    hit = dda_traverse2<true, true, true>(fetcher, ray_dir, lid, ray_pos, stats);
+    //hit = dda<256>(fetcher, ray_dir, ray_pos, thingy, stats);
+    //hit = dda_traverse2<true, true, true>(fetcher, ray_dir, lid, ray_pos, stats);
+    hit = dda_traverse(fetcher, ray_dir, lid, ray_pos, thingy, stats);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -95,19 +98,24 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     */
     
     //
+    float3 col = 0;
     switch (debug_type) {
         case DebugType.Combined:
-            output[id.xy] = float4(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0, 0);
-            return;
+            col = float3(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0);
+            break;
         case DebugType.FullHalt:
-            output[id.xy] = float4(stats.full_halts / 8.0);
-            return;
+            col = stats.full_halts / 8.0;
+            break;
         case DebugType.Iterations:
-            output[id.xy] = float4(stats.total_iterations / 64.0);
-            return;
+            if (stats.total_iterations < 64) {
+                col = stats.total_iterations / 64.0;
+            } else {
+                col = float3(1, 0, 1);
+            }
+            break;
         case DebugType.Recursions:
-            output[id.xy] = float4(stats.recursions / 64.0);
-            return;
+            col = stats.recursions / 64.0;
+            break;
         case DebugType.World:
             uint clock = getRealtimeClock().x;
 
@@ -115,11 +123,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             InterlockedMax(max_clock, clock);
             InterlockedMin(min_clock, clock);
             GroupMemoryBarrierWithGroupSync();
-            //output[id.xy] = float4(stats.last_level_raw_dd / 64.0);
-            //output[id.xy] = float4(world % 10.0 / 10.0, 0);
-            output[id.xy] = float4((max_clock - min_clock) / 1024.0);
+            col = (max_clock - min_clock) / 1024.0;
             break;
     }
+
+    output[id.xy] = float4(col, 0);
     //output[id.xy] = float4(hit ? 1 : 0);
     //output[id.xy] = float4(world % 10 / 10.0, 0);
     return;

@@ -54,15 +54,15 @@ struct Node {
         packed.x = (depth_level & 0b1111);
 
         // pack distance
-        packed.y = (uint8_t1)floor(max(distance - 0.5, 0));
+        packed.y = distance;
 
         return packed;
     }
 
     static Node from_raw(PackedNode raw) {
         Node node;
-        uint8_t first = raw.x;
-        uint8_t second = raw.y;
+        uint first = raw.x;
+        uint second = raw.y;
 
 
         //node.position = uint3(first & 0xFF, (first >> 8) & 0xFF, (first >> 16) & 0xFF);
