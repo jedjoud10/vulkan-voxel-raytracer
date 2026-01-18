@@ -28,6 +28,26 @@ pub(super) unsafe fn get_physical_device_score(
             .unwrap()
     );
 
+    let mut device_features_12 = vk::PhysicalDeviceVulkan12Features::default();
+    let mut device_features_13 = vk::PhysicalDeviceVulkan13Features::default();
+    
+    let mut physical_device_features = vk::PhysicalDeviceFeatures2::default()
+        .features(vk::PhysicalDeviceFeatures::default())
+        .push_next(&mut device_features_12)
+        .push_next(&mut device_features_13);
+    instance.get_physical_device_features2(physical_device, &mut physical_device_features);
+    let device_features_base = &physical_device_features.features;
+
+    let physical_device_features_supported = 
+        device_features_base.shader_int16 == 1 &&
+        device_features_base.shader_int16 == 1 &&
+        device_features_12.storage_buffer8_bit_access == 1 &&
+        device_features_12.shader_float16 == 1 &&
+        device_features_12.shader_int8 == 1 &&
+        device_features_13.synchronization2 == 1;
+        
+    log::info!("physical device supports features: {physical_device_features_supported}");
+
     let mut score = 0;
 
     let min = surface_capabilities.min_image_count;
@@ -54,7 +74,7 @@ pub(super) unsafe fn get_physical_device_score(
         .is_some();
     log::info!("compatible surface: {surface_compatible}");
 
-    if !double_buffering_supported || !present_modes_supported || !surface_compatible {
+    if !double_buffering_supported || !present_modes_supported || !surface_compatible || !physical_device_features_supported {
         return None;
     }
 

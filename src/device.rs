@@ -22,15 +22,15 @@ pub unsafe fn create_device_and_queue(
         .queue_family_index(queue_family_index);
     let queue_create_infos = [queue_create_info];
 
-    let device_features = vk::PhysicalDeviceFeatures::default()
+    let device_features_base = vk::PhysicalDeviceFeatures::default()
         .shader_int16(true)
         .shader_int64(true);
-    let mut device_features_13 = vk::PhysicalDeviceVulkan13Features::default()
-        .synchronization2(true);
     let mut device_features_12 = vk::PhysicalDeviceVulkan12Features::default()
         .storage_buffer8_bit_access(true)
         .shader_float16(true)
         .shader_int8(true);
+    let mut device_features_13 = vk::PhysicalDeviceVulkan13Features::default()
+        .synchronization2(true);
 
     let device_extension_names = [
         ash::khr::swapchain::NAME,
@@ -43,7 +43,7 @@ pub unsafe fn create_device_and_queue(
 
     let device_create_info = vk::DeviceCreateInfo::default()
         .enabled_extension_names(&device_extension_names_ptrs)
-        .enabled_features(&device_features)
+        .enabled_features(&device_features_base)
         .queue_create_infos(&queue_create_infos)
         .push_next(&mut device_features_13)
         .push_next(&mut device_features_12);

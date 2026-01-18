@@ -196,6 +196,7 @@ pub unsafe fn generate_voxel_image(
     voxel_indices_image_view: vk::ImageView,
     voxel_generate_pipeline: &VoxelGeneratePipeline,
 ) {
+    log::info!("generating voxel image...");
     let VoxelImage { image: voxel_image, allocation: _, per_mip_views: voxel_mips, image_view_whole: voxel_image_view } = *voxel_image_wrapper;
     
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
@@ -280,6 +281,7 @@ pub unsafe fn generate_voxel_image(
             .dst_set(descriptor_sets[0])
             .image_info(&descriptor_image_infos);
         device.update_descriptor_sets(&[base_descriptor_write], &[]);
+        log::info!("updated bottom mip-level descriptor");
 
         // we must also write the descriptor sets for the propagated voxel images
         for i in 1..MIP_LEVELS {
@@ -304,6 +306,7 @@ pub unsafe fn generate_voxel_image(
                 .image_info(&descriptor_image_infos);
 
             device.update_descriptor_sets(&[propagate_descriptor_write], &[]);
+            log::info!("updated mip-level {i} descriptor");
         }
     }
 

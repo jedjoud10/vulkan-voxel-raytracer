@@ -11,6 +11,7 @@ pub struct PushConstants {
     pub matrix: vek::Mat4<f32>,
     pub position: vek::Vec4<f32>,
     pub sun: vek::Vec4<f32>,
+    pub debug_type: u32,
 }
 
 #[repr(C)]

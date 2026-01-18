@@ -26,56 +26,49 @@ bool ray_box_intersection(
     return tmin < tmax;
 }
 
-typealias PackedNode = Node;
+typealias PackedNode = uint8_t2;
 
 struct Node {
     static Node root(int size) {
-        return Node(0, 0, 0, 0, size);
+        return Node(0, 0);
     }
-
-    // position. between zero and SIZE
-    uint3 position;
 
     // represented by 4 bits, so range is [0..15]
     // depth of the root node is zero
-    uint depth_level;
+    uint8_t depth_level;
 
     // distance that we can safely "skip" over to reach the node. always an lower bound to the actual distance
     // this is scaled by the voxel size of this node's voxel size
     // this is a value in the range [0..1]
-    float distance;
-
-    uint8_t3 next_min_bounds_world_space;
-    uint8_t3 next_max_bounds_world_space;
+    uint8_t distance;
 
     PackedNode into_raw() {
-        return this;
-        /*
+        PackedNode packed = uint8_t2(0);
+        
         // pack the position in the first 3 bytes
         // which means that max map/chunk size IS limited to 256. oh well
         // needs chunking!
-        PackedNode packed = position.x & 0xFF | ((position.y & 0xFF) << 8) | ((position.z & 0xFF) << 16);
+        //packed.x = position.x & 0xFF | ((position.y & 0xFF) << 8) | ((position.z & 0xFF) << 16);
 
         // pack the depth level as well. 4 bits
-        packed |= (depth_level & 0b1111) << 24;
+        packed.x = (depth_level & 0b1111);
 
         // pack distance
-        uint clamped = (uint)clamp(ceil(distance * 15), 0, 15);
-        packed |= (clamped & 0b1111) << 28;
+        packed.y = (uint8_t1)floor(max(distance - 0.5, 0));
 
         return packed;
-        */
     }
 
     static Node from_raw(PackedNode raw) {
-        return raw;
-        /*
         Node node;
-        node.position = uint3(raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF);
-        node.depth_level = (raw >> 24) & 0b1111;
-        node.distance = ((raw >> 28) & 0b1111) / 15.0;
+        uint8_t first = raw.x;
+        uint8_t second = raw.y;
+
+
+        //node.position = uint3(first & 0xFF, (first >> 8) & 0xFF, (first >> 16) & 0xFF);
+        node.depth_level = first & 0b1111;
+        node.distance = second;
         return node;
-        */
     }
 
 }

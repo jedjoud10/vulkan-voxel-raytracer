@@ -86,6 +86,7 @@ struct InternalApp {
     visible_surface_indirect_dispatch_buffer: Buffer,
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
+    debug_type: u32,
 }
 
 impl InternalApp {
@@ -132,8 +133,9 @@ impl InternalApp {
             .collect::<Vec<(vk::PhysicalDevice, u32)>>();
         physical_device_candidates.sort_by(|(_, a), (_, b)| a.cmp(b));
 
-        if (physical_device_candidates.is_empty()) {
+        if physical_device_candidates.is_empty() {
             log::error!("no physical device was chosen!");
+            panic!();
         }
 
         let physical_device = physical_device_candidates[0].0;
@@ -221,8 +223,10 @@ impl InternalApp {
             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
             .unwrap();
         let end_fence = device.create_fence(&Default::default(), None).unwrap();
+        log::info!("created semaphores and fence");
 
         let descriptor_pool = pool::create_descriptor_pool(&device);
+        log::info!("created descriptor pool");
 
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker);
         log::info!("created render compute pipeline");
@@ -234,18 +238,28 @@ impl InternalApp {
         log::info!("created voxel tick compute pipeline");
 
         let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
+        log::info!("created voxel image");
 
         let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
+        log::info!("created voxel surface indices image");
 
         const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
         const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
 
         let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer");
+        log::info!("created voxel surface buffer");
+        
         let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer");
-        let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer");
+        log::info!("created voxel surface counter");
 
+        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer");
+        log::info!("created visible surfaces buffer");
+
+        let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
+        log::info!("created visible surfaces counter");
+
+        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer");
+        log::info!("created visible surfaces indirect buffer");
 
         voxel::generate_voxel_image(
             &device,
@@ -296,6 +310,7 @@ impl InternalApp {
             visible_surface_counter_buffer,
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
+            debug_type: 0,
         }
     }
 
@@ -573,6 +588,7 @@ impl InternalApp {
             matrix: self.movement.proj_matrix * self.movement.view_matrix,
             position: self.movement.position.with_w(0f32),
             sun: self.sun.normalized().with_w(0f32),
+            debug_type: self.debug_type as u32,
         };
 
         let raw = bytemuck::bytes_of(&push_constants);
@@ -828,6 +844,10 @@ impl ApplicationHandler for App {
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyP)).pressed() {
                     dbg!(delta);
+                }
+
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
+                    inner.debug_type = (inner.debug_type + 1) % 5;
                 }
 
                 inner.window.request_redraw();

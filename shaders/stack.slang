@@ -1,7 +1,7 @@
 
 public struct Stack<let N: int, T> {
     T[N] elements;
-    uint length;
+    uint8_t length;
 
     __init() {
         length = 0;

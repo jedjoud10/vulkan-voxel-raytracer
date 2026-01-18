@@ -62,10 +62,10 @@ fn main() {
     let global_session = slang::GlobalSession::new().unwrap();
 
     let session_options = slang::CompilerOptions::default()
-        .optimization(slang::OptimizationLevel::Maximal)
-        .debug_information(slang::DebugInfoLevel::Maximal)
+        .optimization(slang::OptimizationLevel::Default)
+        .debug_information(slang::DebugInfoLevel::None)
         .obfuscate(false)
-        .no_mangle(true)
+        .no_mangle(false)
         .vulkan_use_entry_point_name(true)
         .matrix_layout_row(true);
 

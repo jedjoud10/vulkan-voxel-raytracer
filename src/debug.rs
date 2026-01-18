@@ -36,8 +36,6 @@ pub unsafe fn create_debug_messenger(
     ash::ext::debug_utils::Instance,
     ash::vk::DebugUtilsMessengerEXT,
 )> {
-    None
-    /*
     let debug_messenger;
     #[cfg(debug_assertions)]
     {
@@ -53,7 +51,6 @@ pub unsafe fn create_debug_messenger(
     }
 
     debug_messenger
-    */
 }
 
 pub unsafe fn create_debug_marker(
