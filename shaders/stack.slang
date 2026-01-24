@@ -10,12 +10,25 @@ public struct Stack<let N: int, T> {
     [mutating]
     void append(T element) {
         if (length == N) {
-            //printf("cannot append to stack. stack full. length=%i", length);
+            printf("cannot append to stack. stack full. length=%i", length);
             return;
         }
 
         elements[length] = element;
         length++;
+    }
+
+    T peek() {
+        return elements[length - 1];
+    }
+
+    [mutating]
+    void pop() {
+        if (length == 0) {
+            return;
+        }
+
+        length--;
     }
 
     [mutating]

@@ -24,6 +24,7 @@ enum DebugType: uint {
     Recursions,
     FullHalt,
     World,
+    Timer,
 }
 
 groupshared uint min_clock;
@@ -31,7 +32,8 @@ groupshared uint max_clock;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void main(uint3 id: SV_DispatchThreadID, uint8_t3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
+void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
+
     if (all(lid.xy == 0)) {
         max_clock = 0;
         min_clock = 0xFFFFFFFF;
@@ -84,7 +86,13 @@ void main(uint3 id: SV_DispatchThreadID, uint8_t3 lid: SV_GroupThreadID, uniform
     TraceStats stats;
     //hit = dda<256>(fetcher, ray_dir, ray_pos, thingy, stats);
     //hit = dda_traverse2<true, true, true>(fetcher, ray_dir, lid, ray_pos, stats);
-    hit = dda_traverse(fetcher, ray_dir, lid, ray_pos, thingy, stats);
+    uint per_clock = 0;
+    
+    if (debug_type == DebugType.Timer) {
+        per_clock = getRealtimeClock().x;
+    }
+    
+    hit = dda_traverse3<true, true, true>(fetcher, ray_dir, ray_pos, stats);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -101,10 +109,14 @@ void main(uint3 id: SV_DispatchThreadID, uint8_t3 lid: SV_GroupThreadID, uniform
     float3 col = 0;
     switch (debug_type) {
         case DebugType.Combined:
-            col = float3(stats.total_iterations / 64.0, stats.recursions / 8.0, stats.full_halts / 8.0);
+            //col = stats.recursions / 64.0;    
+            //col = ((ray_pos + ray_dir * stats.data - 0.01) % 1.0);    
+            col = stats.pause_resumes / 8.0;
+            //col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.full_halts / 8.0);
             break;
         case DebugType.FullHalt:
-            col = stats.full_halts / 8.0;
+            col = thingy.world.get().value - thingy.block_pos.get().value;
+            //col = stats.full_halts / 8.0;
             break;
         case DebugType.Iterations:
             if (stats.total_iterations < 64) {
@@ -114,16 +126,22 @@ void main(uint3 id: SV_DispatchThreadID, uint8_t3 lid: SV_GroupThreadID, uniform
             }
             break;
         case DebugType.Recursions:
-            col = stats.recursions / 64.0;
+            col = hit ? 1 : 0;
             break;
-        case DebugType.World:
+        case DebugType.Timer:
             uint clock = getRealtimeClock().x;
+            uint elapsed = clock - per_clock;
 
             GroupMemoryBarrierWithGroupSync();
-            InterlockedMax(max_clock, clock);
-            InterlockedMin(min_clock, clock);
+            AllMemoryBarrier();
+            InterlockedMax(max_clock, elapsed);
+            InterlockedMin(min_clock, elapsed);
+            AllMemoryBarrier();
             GroupMemoryBarrierWithGroupSync();
+            //col = (max_clock - min_clock) / 1024.0;
             col = (max_clock - min_clock) / 1024.0;
+            break;
+        case DebugType.World:
             break;
     }
 

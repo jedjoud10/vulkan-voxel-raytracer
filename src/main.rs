@@ -847,7 +847,7 @@ impl ApplicationHandler for App {
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
-                    inner.debug_type = (inner.debug_type + 1) % 5;
+                    inner.debug_type = (inner.debug_type + 1) % 6;
                 }
 
                 inner.window.request_redraw();
