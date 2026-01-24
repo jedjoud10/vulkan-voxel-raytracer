@@ -5,6 +5,7 @@
 #include <stack.slang>
 #include <octree.slang>
 #include <voxel.slang>
+#include <debug_util.slang>
 
 static const int MIP_LEVELS = 8;
 static const int SIZE = 1 << (MIP_LEVELS-1);
@@ -63,7 +64,7 @@ struct Leaf {
 //   |-  ... 
 
 static const uint8_t LEVEL_DIFF = 3;
-static const uint8_t DDA_STEPS = 22;
+static const uint8_t DDA_STEPS = 20;
 
 public struct MultiLevelThingyOutput<bool hasFace, bool hasWorld, bool hasBlockPos>  {
     public Conditional<int, hasFace> face;
@@ -91,11 +92,12 @@ struct SomeOtherNode {
     int16_t3 floored_pos;
     bool3 eqs;
     half3 side_dist;
-    uint8_t3 min_bounds_local_space;
-    uint8_t3 max_bounds_local_space;
+    uint8_t parent_depth_level;
+    uint8_t3 parent_floored_pos;
     uint8_t1 indexer;
 }
 
+// we will trace the DDA in the space of the parent
 bool dda_multi_level_stackfull(
     Fetcher fetcher,
     half3 ray_dir,
@@ -109,14 +111,34 @@ bool dda_multi_level_stackfull(
     int our_element_index = stack.length - 1;
     SomeOtherNode element = stack.peek();
 
-    const uint8_t MIP = (uint8_t)max(element.depth_level, 0);
+    const uint8_t PARENT_MAX_BOUNDS = (uint8_t)1 << (element.parent_depth_level - element.depth_level);
+    const uint8_t MIP = element.depth_level;
     const uint8_t VOXEL_SIZE = (uint8_t)1 << MIP;
 
-    float3 modified_ray_pos = (ray_pos + ray_dir * (element.starting_dist - 0.01)) / VOXEL_SIZE;
-
+    
     int16_t3 floored_pos;
     half3 side_dist;
     bool3 eqs;
+
+    // mip space position of the parent
+    uint8_t3 mip_parent_position = ( element.parent_floored_pos << (element.parent_depth_level - element.depth_level));
+
+    // world space size of the parent!
+    uint8_t parent_size = (uint8_t)1 << element.parent_depth_level;
+
+    // world space position of the node, relative to parent
+    float3 modified_ray_pos;
+    
+    if (element.parent_depth_level == 0) {
+        // root node, no transformations
+        modified_ray_pos = ray_pos / VOXEL_SIZE;
+        mip_parent_position = 0;
+    } else {
+        modified_ray_pos = (ray_pos + ray_dir * (element.starting_dist)) / VOXEL_SIZE - (mip_parent_position);
+    }
+
+    // within parent space
+    floored_pos = (int16_t3)floor(modified_ray_pos);
 
     if (element.initialized) {
         floored_pos = element.floored_pos;
@@ -124,34 +146,53 @@ bool dda_multi_level_stackfull(
         eqs = element.eqs;
         
         // we must resume the ray, so move to the next voxel from *now*, otherwise we will just be visiting the same child over and over
+        stats.total_iterations++;
         eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
         side_dist += select(eqs, (half3)1, (half3)0) * inv_dir;
         floored_pos += select(eqs, (int16_t3)1, (int16_t3)0) * dir_sign;
     } else {
-        floored_pos = (int16_t3)floor(modified_ray_pos);
+        if (MIP == 1) {
+            //debugVec3(mip_parent_position);
+            //debugVec3(parent_position);
+        }
+
+        //parent_offset = parent_position / parent_size;
         side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
         eqs = false;
         element.initialized = true;
-        element.eqs = eqs;
-        element.side_dist = side_dist;
-        element.floored_pos = floored_pos;
-        stack.elements[our_element_index] = element;
     }
 
 
     //int face_local = 0;
     for (uint8_t i = element.indexer; i < DDA_STEPS; i++) {
+        uint8_t3 hello = (uint8_t3)(floored_pos + mip_parent_position);
+        //debugVec3(mip_parent_position);
+        if (MIP == 0) {
+            debugVec3(mip_parent_position);
+            //hello = floored_pos;
+
+            //debugVec3(mip_parent_position);
+            //printf("BASE: %i %i %i OFFSETTED: %i %i %i", floored_pos.x, floored_pos.y, floored_pos.z, offsetted.x, offsetted.y, offsetted.z);
+        }
+
         // skip if we are outside the bounds of the map
-        if (any(floored_pos < 0) || any(floored_pos >= (SIZE >> MIP))) {
+        if (MIP == ROOT_NODE_LEVEL && (any(floored_pos < 0) || any(floored_pos >= 1))) {
             break;
         }
-        
+
+        // skip if we are outside the bounds of the parent node
+        if (any(floored_pos < -1) || any(floored_pos >= (PARENT_MAX_BOUNDS+1)) && MIP != 0) {
+            break;
+        }
+
+        /*
         // skip if we are outside the bounds of the parent
         if (any((floored_pos+1) < (element.min_bounds_local_space)) || any((floored_pos - 1) >= (element.max_bomin_bounds_local_spaceunds_local_space))) {
             break;
         }
+        */
 
-        uint8_t raw = fetcher.fetch_raw((uint8_t3)(floored_pos), MIP);
+        uint8_t raw = fetcher.fetch_raw(hello, MIP);
 
         /*
         if (i > 8) {
@@ -166,8 +207,8 @@ bool dda_multi_level_stackfull(
 
         // handle partially full nodes / leaf voxel nodes
         if (raw != 0) {
-            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * VOXEL_SIZE) - 0.1;
-            float global_distance = element.starting_dist + local_dist;
+            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * VOXEL_SIZE);
+            float global_distance = element.starting_dist + local_dist - 0.5;
 
             // completely full nodes are well, completely full. we can do the leaf-level logic since we know we can skip them
             if (MIP > 0) {
@@ -184,11 +225,12 @@ bool dda_multi_level_stackfull(
                 uint8_t3 next_max_bounds_local_space = (uint8_t3)(floored_pos+1) << SOME_THING;
                 
 
-                SomeOtherNode node = SomeOtherNode(false, max(global_distance, 0), (uint8_t)max((int)MIP-(int)LEVEL_DIFF, 0), 0, 0, 0, next_min_bounds_local_space, next_max_bounds_local_space, 0);
+                SomeOtherNode node = SomeOtherNode(false, max(global_distance, 0), (uint8_t)max((int)MIP-(int)LEVEL_DIFF, 0), 0, 0, 0, MIP, (uint8_t3)floored_pos, 0);
                 stack.append(node);
 
                 return false;
             } else {
+                debugVec3(hello);
                 return true;
             }
             
@@ -253,7 +295,7 @@ bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let h
         }
         
         // skip if we are outside the bounds of the parent
-        if (any((floored_pos+1) < (min_bounds_local_space)) || any((floored_pos - 1) >= (max_bounds_local_space))) {
+        if (any((floored_pos + 1) < (min_bounds_local_space)) || any((floored_pos - 1) >= (max_bounds_local_space))) {
             break;
         }
         
@@ -304,7 +346,7 @@ bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let h
     return false;
 }
 
-const static int STACK_SIZE = 3;
+const static int STACK_SIZE = 4;
 
 groupshared PackedNode[16*16*STACK_SIZE] stacks;
 
@@ -473,6 +515,8 @@ bool dda_traverse2<let hasFace : bool, let hasWorld : bool, let hasBlockPos: boo
     
 }
 
+static const int ROOT_NODE_LEVEL = MIP_LEVELS - 1;
+
 bool dda_traverse3<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(   
     Fetcher fetcher,
     half3 ray_dir,
@@ -485,7 +529,7 @@ bool dda_traverse3<let hasFace : bool, let hasWorld : bool, let hasBlockPos: boo
     half3 dir_sign = (half3)sign(ray_dir);
 
     Stack<STACK_SIZE, SomeOtherNode> stack = Stack<STACK_SIZE, SomeOtherNode>();
-    stack.append(SomeOtherNode(false, 0, MIP_LEVELS-2, 0, false, 0, 0, SIZE, 0));
+    stack.append(SomeOtherNode(false, 0, ROOT_NODE_LEVEL, 0, false, 0, 0, 0, 0));
 
     [loop]
     while (stack.length > 0) {
