@@ -17,6 +17,7 @@ mod swapchain;
 mod voxel;
 mod ticker;
 mod buffer;
+mod rays;
 
 use ash;
 use ash::vk;
@@ -42,6 +43,7 @@ use crate::pipeline::VoxelGeneratePipeline;
 use crate::pipeline::VoxelTickPipeline;
 use crate::voxel::_SIZE;
 use crate::voxel::VoxelImage;
+use crate::rays::*;
 
 struct InternalApp {
     input: Input,
@@ -74,6 +76,8 @@ struct InternalApp {
     render_compute_pipeline: ComputePipeline,
     generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
+
+    dda_precomputed: Buffer,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
@@ -273,6 +277,9 @@ impl InternalApp {
             &generate_voxel_compute_pipeline,            
         );
 
+        let dda_precomputed = rays::create_dda_precomputed_buffer(&device, pool, queue, &mut allocator, &debug_marker);
+        log::info!("created precomputed 4x4x4 DDA buffer");
+
         Self {
             input: Default::default(),
             movement: Movement::new(),
@@ -310,6 +317,7 @@ impl InternalApp {
             visible_surface_counter_buffer,
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
+            dda_precomputed,
             debug_type: 0,
         }
     }
@@ -528,10 +536,17 @@ impl InternalApp {
             .buffer(self.voxel_surface_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
+        let descriptor_precomputed_dda_buffer_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.dda_precomputed.buffer)
+            .offset(0)
+            .range(u64::MAX);
+        
+
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
         let descriptor_voxel_image_infos = [descriptor_voxel_image_info];
         let descriptor_voxel_surface_index_image_infos = [descriptor_voxel_surface_index_image_info];
         let descriptor_voxel_buffer_infos = [descriptor_voxel_buffer_info];
+        let descriptor_precomputed_dda_buffer_infos = [descriptor_precomputed_dda_buffer_info];
 
         let descriptor_write_1 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
@@ -557,9 +572,15 @@ impl InternalApp {
             .dst_binding(3)
             .dst_set(descriptor_set)
             .image_info(&descriptor_voxel_surface_index_image_infos);
+        let descriptor_write_5 = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .dst_binding(4)
+            .dst_set(descriptor_set)
+            .buffer_info(&descriptor_precomputed_dda_buffer_infos);
 
         self.device
-            .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4], &[]);
+            .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4, descriptor_write_5], &[]);
 
         self.device.cmd_bind_descriptor_sets(
             cmd,
@@ -760,6 +781,9 @@ impl InternalApp {
 
         self.visible_surface_indirect_dispatch_buffer.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed indirect dispatch buffer");
+
+        self.dda_precomputed.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed precomputed dda buffer");
 
         // TODO: Just cope with the error messages vro
         self.device

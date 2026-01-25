@@ -108,11 +108,17 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
+    let render_descriptor_set_layout_binding_precomputed_dda_buffer = vk::DescriptorSetLayoutBinding::default()
+        .binding(4)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
     let render_descriptor_set_layout_bindings = [
         render_descriptor_set_layout_binding_rt_image,
         render_descriptor_set_layout_binding_voxel_image,
         render_descriptor_set_layout_binding_voxel_surface_buffer,
-        render_descriptor_set_layout_binding_voxel_surface_index_image
+        render_descriptor_set_layout_binding_voxel_surface_index_image,
+        render_descriptor_set_layout_binding_precomputed_dda_buffer
     ];
 
     let render_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()

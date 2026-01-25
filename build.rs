@@ -5,19 +5,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use slang::Downcast;
+use shader_slang::*;
 
-fn load_module(session: &slang::Session, file_name: &str) {
-    let module = session.load_module(&format!("{file_name}.slang")).unwrap();
+fn load_module(session: &Session, file_name: &str) {
+    let module: Module = session.load_module(&format!("{file_name}.slang")).unwrap();
 
     if module.entry_point_count() == 0 {
         return;
     }
 
-    let mut component_types = Vec::<slang::ComponentType>::new();
-    component_types.push(module.downcast().clone());
+    let mut component_types = Vec::<ComponentType>::new();
+    component_types.push(ComponentType::from(module.clone()));
     for entry_point in module.entry_points() {
-        component_types.push(entry_point.downcast().clone());
+        component_types.push(ComponentType::from(entry_point));
     }
 
     let program = session.create_composite_component_type(&component_types).unwrap();
@@ -59,22 +59,22 @@ fn visit_dirs(dir: &Path, list: &mut Vec<DirEntry>) {
 // TODO: optimize. this will re-compile all shaders, even if only one of them was modified
 fn main() {
     println!("cargo:rerun-if-changed=shaders");
-    let global_session = slang::GlobalSession::new().unwrap();
+    let global_session = GlobalSession::new().unwrap();
 
-    let session_options = slang::CompilerOptions::default()
-        .optimization(slang::OptimizationLevel::Maximal)
-        .debug_information(slang::DebugInfoLevel::None)
+    let session_options = CompilerOptions::default()
+        .optimization(OptimizationLevel::Maximal)
+        .debug_information(DebugInfoLevel::None)
         .obfuscate(false)
         .no_mangle(false)
         .vulkan_use_entry_point_name(true)
         .matrix_layout_row(true);
 
     
-    let target_desc = slang::TargetDesc::default().format(slang::CompileTarget::Spirv);
+    let target_desc = TargetDesc::default().format(CompileTarget::Spirv);
     let targets = [target_desc];
     let search_paths = [c"shaders".as_ptr(), c"shaders/noises".as_ptr()];
 
-    let session_desc = slang::SessionDesc::default()
+    let session_desc = SessionDesc::default()
         .targets(&targets)
         .search_paths(&search_paths)
         .options(&session_options);

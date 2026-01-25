@@ -14,6 +14,9 @@ StructuredBuffer<SurfaceData> surface_data_buffer;
 [[vk::binding(3, 0)]]
 Texture3D<uint> voxels_indices;
 
+[[vk::binding(4, 0)]]
+StructuredBuffer<uint64_t> dda_precomputed;
+
 [SpecializationConstant] const bool USE_PIXELATED_SHADOWS = true;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
 [SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = false;
@@ -95,7 +98,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         per_clock = getRealtimeClock().x;
     }
     
-    hit = dda_traverse<true, true, true, true>(fetcher, ray_dir, ray_pos, lid, thingy, _stats);
+    hit = dda_traverse<true, true, true, true>(fetcher, ray_dir, ray_pos, lid, dda_precomputed, thingy, _stats);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -119,7 +122,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
             break;
         case DebugType.FullHalt:
-            //col = distance(ray_pos, thingy.world.get().value) / 10.0;
             col = abs(get_face_normal(thingy.face.get().value, sign(ray_dir)));
             //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
@@ -132,7 +134,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             }
             break;
         case DebugType.Recursions:
-            col = hit ? 1 : 0;
+            //col = distance(ray_pos, thingy.world.get().value) / 10.0;
+            col = stats.data;
+            //col = thingy.world.get().value % 10.0 / 10.0;
+            //col = hit ? 1 : 0;
             break;
         case DebugType.Timer:
             uint clock = getRealtimeClock().x;
@@ -148,6 +153,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             col = (max_clock - min_clock) / 1024.0;
             break;
         case DebugType.World:
+            col = stats.data;
+            //col = hit ? 1 : 0;
             break;
     }
 
@@ -352,15 +359,5 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void lighting(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
-    float2 screen_uvs = (float2)id.xy / screen;
-    screen_uvs *= 2.0;
-    screen_uvs -= 1.0;
-    screen_uvs.y = -screen_uvs.y;
-    screen_uvs.x = -screen_uvs.x;
-
-    float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
-    float3 ray_pos = position.xyz;
-    
-    output[id.xy] = float4(0);
+void lighting(uint3 id: SV_DispatchThreadID) {
 }

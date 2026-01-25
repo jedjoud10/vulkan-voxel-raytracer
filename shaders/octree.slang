@@ -1,27 +1,61 @@
 #ifndef OCTREE
 #define OCTREE
 
+float2 get_face_uvs(int face, float3 position) {
+    if (face == 0) {
+        return position.yz;
+    } else if (face == 1) {
+        return position.xz;
+    } else if (face == 2) {
+        return position.xy;
+    }
+
+    return -1;
+}
+
+int global_face_2(int face, float3 sign) {
+    if (face == 0) {
+        return sign.x > 0 ? 3 : 0;
+    } else if (face == 1) {
+        return sign.y > 0 ? 4 : 1;
+    } else if (face == 2) {
+        return sign.z > 0 ? 5 : 2;
+    }
+
+    return -1;
+}
 
 // https://tavianator.com/2022/ray_box_boundary.html
-bool ray_box_intersection(
+bool ray_box_intersection_2(
     float3 inv_dir,
+    float3 dir_sign,
     float3 ray_pos,
     float3 aabb_min,
     float3 aabb_max,
     out float _tmin,
+    out float _tmax,
+    out int entrance_face_axis,
+    out int exit_face_axis, 
 ) {
     float tmin = 0.0, tmax = 999999;
 
-    float3 t1 = (aabb_min - ray_pos) * inv_dir;
-    float3 t2 = (aabb_max - ray_pos) * inv_dir;
+    float3 t1 = (aabb_min - ray_pos) * inv_dir * dir_sign;
+    float3 t2 = (aabb_max - ray_pos) * inv_dir * dir_sign;
 
     float3 _min = min(t1, t2);
     float3 _max = max(t1, t2);
+
+    bool3 test_1 = max3(_min.x, _min.y, _min.z) == _min;
+    bool3 test_2 = min3(_max.x, _max.y, _max.z) == _max;
+
+    entrance_face_axis = firstbithigh(test_1.x | test_1.y << 1 | test_1.z << 2);
+    exit_face_axis = firstbithigh(test_2.x | test_2.y << 1 | test_2.z << 2);
 
     tmin = max(max3(_min.x, _min.y, _min.z), tmin);
     tmax = min(min3(_max.x, _max.y, _max.z), tmax);
 
     _tmin = tmin;
+    _tmax = tmax;
 
     return tmin < tmax;
 }
