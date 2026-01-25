@@ -237,7 +237,7 @@ impl InternalApp {
         let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device, &debug_marker);
         log::info!("created voxel tick compute pipeline");
 
-        let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R8_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
+        let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R64_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
         log::info!("created voxel image");
 
         let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
@@ -325,12 +325,14 @@ impl InternalApp {
             self.queue,
             self.pool,
             &self.voxel_image,
-            voxel::Voxel {
+            true,
+            /*voxel::Voxel {
                 active: true,
                 reflective: self.ticker.count % 4 == 0,
                 refractive: self.ticker.count % 4 == 1,
                 placed: true,
             }.into_raw(),
+            */
             position,
         )
     }
@@ -848,6 +850,12 @@ impl ApplicationHandler for App {
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
                     inner.debug_type = (inner.debug_type + 1) % 6;
+                }
+
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyQ)).pressed() {
+                    event_loop.exit();
+                    self.internal.take().unwrap().destroy();
+                    return;
                 }
 
                 inner.window.request_redraw();

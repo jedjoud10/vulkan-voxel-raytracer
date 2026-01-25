@@ -6,7 +6,7 @@
 RWTexture2D<float4> output;
 
 [[vk::binding(1, 0)]]
-Texture3D<uint8_t> voxels;
+Texture3D<uint64_t> voxels;
 
 [[vk::binding(2, 0)]]
 StructuredBuffer<SurfaceData> surface_data_buffer;

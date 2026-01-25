@@ -2,7 +2,7 @@
 #include <lighting.slang>
 
 [[vk::binding(0, 0)]]
-Texture3D<uint8_t> voxels;
+Texture3D<uint64_t> voxels;
 
 [[vk::binding(1, 0)]]
 RWTexture3D<uint> voxel_indices;

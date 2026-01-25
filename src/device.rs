@@ -22,6 +22,11 @@ pub unsafe fn create_device_and_queue(
         .queue_family_index(queue_family_index);
     let queue_create_infos = [queue_create_info];
 
+    let mut shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
+        .shader_device_clock(true)
+        .shader_subgroup_clock(true); 
+    let mut atomics = vk::PhysicalDeviceShaderImageAtomicInt64FeaturesEXT::default()
+        .shader_image_int64_atomics(true); 
     let device_features_base = vk::PhysicalDeviceFeatures::default()
         .shader_int16(true)
         .shader_int64(true);
@@ -35,6 +40,9 @@ pub unsafe fn create_device_and_queue(
     let device_extension_names = [
         ash::khr::swapchain::NAME,
         ash::khr::shader_float16_int8::NAME,
+        ash::khr::shader_atomic_int64::NAME,
+        ash::khr::shader_clock::NAME,
+        ash::ext::shader_image_atomic_int64::NAME,
     ];
 
     let device_extension_names_ptrs = device_extension_names
@@ -47,7 +55,9 @@ pub unsafe fn create_device_and_queue(
         .enabled_features(&device_features_base)
         .queue_create_infos(&queue_create_infos)
         .push_next(&mut device_features_13)
-        .push_next(&mut device_features_12);
+        .push_next(&mut device_features_12)
+        .push_next(&mut atomics)
+        .push_next(&mut shader_clock);
 
     let device = instance
         .create_device(physical_device, &device_create_info, None)

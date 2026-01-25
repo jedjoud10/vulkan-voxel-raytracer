@@ -722,14 +722,14 @@ pub unsafe fn update_voxel(
     queue: vk::Queue,
     pool: vk::CommandPool,
     voxel_image: &VoxelImage,
-    voxel: u8,
+    toggle: bool,
     position: vek::Vec3<u32>,
 ) {
     let src_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
         .usage(vk::BufferUsageFlags::TRANSFER_SRC)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .size(1);
+        .size(size_of::<u64>() as u64);
     let src = device.create_buffer(&src_create_info, None).unwrap();
 
     let requirements = device.get_buffer_memory_requirements(src);
@@ -745,7 +745,11 @@ pub unsafe fn update_voxel(
     let device_memory = allocation.memory();
     device.bind_buffer_memory(src, device_memory, 0).unwrap();
     let raw = allocation.mapped_slice_mut().unwrap();
-    raw.copy_from_slice(&[voxel]);
+    raw[0] = 0b01010101;
+    raw[2] = 0b01010101;
+    raw[4] = 0b01010101;
+    raw[6] = 0b01010101;
+
 
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
