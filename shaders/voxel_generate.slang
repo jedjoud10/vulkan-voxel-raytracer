@@ -1,6 +1,6 @@
 #include <other.slang>
 #include <octree.slang>
-#include <noises/noise3D.slang>
+#include <noises.slang>
 
 [[vk::binding(0, 0)]]
 RWTexture3D<uint64_t> voxels;
@@ -27,26 +27,18 @@ void main(uint3 id: SV_DispatchThreadID) {
 			for (int z = 0; z < 4; z++) {
                 float3 p = (float3)id + float3(x, y, z) / 4.0;
     
-                float noisy = (noise((float2)p.xz * 0.1) * 10);
+                float noisy = (snoise((float2)p.xz * 0.03) * 10);
                 float base = (float)p.y - 15.0;
                 base += noisy * 0.5;
 
                 float extra = min(0, noise((float2)p.xz * 0.05) * 20);
                 base += extra;
 
-                base += saturate(sin(snoise(p * 0.01) * 0.2)) * 90.5;
+                //base += saturate(sin(snoise(p * 0.01) * 0.2)) * 90.5;
+                base += saturate(sin(snoise(p * float3(1, 4, 1) * 0.1)) * 5) * 4;
 
-                /*
-                float cave = sign(-snoise(p * 0.02) + 0.8) * 1000;
-                base += cave;
-                */
-
-                /*
-                Voxel voxel;
-                voxel.active = base < 0.0;
-                voxel.reflective = false;
-                voxel.refractive = false;
-                */
+                //float cave = sign(-snoise(p * 0.02) + 0.8) * 1000;
+                //base += cave;
 
                 raw |= (base < 0.0) ? ((uint64_t)1 << i) : 0; 
                 //voxel.type = cave < 0 ? Type.Grass : Type.Rock;

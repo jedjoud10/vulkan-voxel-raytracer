@@ -83,7 +83,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     float3 tint = 1.0;
     
     MultiLevelThingyOutput<true, true, true> thingy;
-    TraceStats stats;
+    thingy.block_pos.set(0);
+    thingy.face.set(0);
+    thingy.world.set(0.0);
+    Conditional<TraceStats, true> _stats;
     //hit = dda<256>(fetcher, ray_dir, ray_pos, thingy, stats);
     //hit = dda_traverse2<true, true, true>(fetcher, ray_dir, lid, ray_pos, stats);
     uint per_clock = 0;
@@ -92,7 +95,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         per_clock = getRealtimeClock().x;
     }
     
-    hit = dda_traverse<true, true, true>(fetcher, ray_dir, ray_pos, lid, stats);
+    hit = dda_traverse<true, true, true, true>(fetcher, ray_dir, ray_pos, lid, thingy, _stats);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -106,21 +109,24 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     */
     
     //
+    TraceStats stats = _stats.get().value;
     float3 col = 0;
     switch (debug_type) {
         case DebugType.Combined:
             //col = stats.recursions / 64.0;    
             //col = ((ray_pos + ray_dir * stats.data - 0.01) % 1.0);    
-            col = stats.pause_resumes / 8.0;
-            //col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.full_halts / 8.0);
+            //col = stats.pause_resumes / 8.0;
+            col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
             break;
         case DebugType.FullHalt:
-            col = thingy.world.get().value - thingy.block_pos.get().value;
+            //col = distance(ray_pos, thingy.world.get().value) / 10.0;
+            col = abs(get_face_normal(thingy.face.get().value, sign(ray_dir)));
+            //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
             break;
         case DebugType.Iterations:
-            if (stats.total_iterations < 64) {
-                col = stats.total_iterations / 64.0;
+            if (stats.total_iterations < 256.0) {
+                col = stats.total_iterations / 256.0;
             } else {
                 col = float3(1, 0, 1);
             }
