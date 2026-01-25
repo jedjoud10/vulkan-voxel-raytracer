@@ -92,7 +92,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         per_clock = getRealtimeClock().x;
     }
     
-    hit = dda_traverse<true, true, true>(fetcher, ray_dir, ray_pos, stats);
+    hit = dda_traverse<true, true, true>(fetcher, ray_dir, ray_pos, lid, stats);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);

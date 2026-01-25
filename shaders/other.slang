@@ -49,6 +49,15 @@ public struct TraceStats {
     public float data;
 }
 
+// cube: 6 quads
+// each quad: 4x4 segments, total of 16
+
+// ray intersection:
+// input quad: id in [0..6], represented by 3 bits
+// output quad: id in [0..6], represented by 3 bits
+// input quad segment: 4 bits
+// output quad segment: 4 bits
+
 #define MAX(a, b)  (((a) > (b)) ? (a) : (b)) 
 
 bool dda_bitset(
@@ -100,11 +109,17 @@ bool dda_bitset(
     return false;
 }
 
+groupshared half3[16*16*4] tmp_side_dist;
+groupshared int16_t3[16*16*4] tmp_floored_pos;
+groupshared uint8_t3[16*16*4] tmp_min_bounds_local_space;
+groupshared uint8_t3[16*16*4] tmp_max_bounds_local_space;
+
 // MAX(K, 0) is the mip level
-bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
+bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool, let I: int>(
     Fetcher fetcher,
     half3 ray_dir,
     float3 ray_pos,
+    uint lid_index,
     uint8_t3 min_bounds_local_space,
     uint8_t3 max_bounds_local_space,
     half3 inv_dir,
@@ -140,13 +155,23 @@ bool dda_multi_level<let K : int, let hasFace : bool, let hasWorld : bool, let h
             if (K > 0) {
                 stats.recursions++;
 
+                tmp_side_dist[lid_index+I*16*16] = side_dist;
+                tmp_floored_pos[lid_index+I*16*16] = floored_pos;
+                tmp_min_bounds_local_space[lid_index+I*16*16] = min_bounds_local_space;
+                tmp_max_bounds_local_space[lid_index+I*16*16] = max_bounds_local_space;
+
                 const uint8_t SOME_THING = (uint8_t)(K - (MAX(K-LEVEL_DIFF, 0)));
                 uint8_t3 next_min_bounds_local_space = ((uint8_t3)floored_pos << SOME_THING);
                 uint8_t3 next_max_bounds_local_space = (uint8_t3)(floored_pos+1) << SOME_THING;
 
-                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, next_min_bounds_local_space, next_max_bounds_local_space, inv_dir, dir_sign, max(distance - 0.1, 0), stats)) {
+                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos, I+1>(fetcher, ray_dir, ray_pos, lid_index, next_min_bounds_local_space, next_max_bounds_local_space, inv_dir, dir_sign, max(distance - 0.1, 0), stats)) {
                     return true;
                 }
+
+                side_dist = tmp_side_dist[lid_index+I*16*16];
+                floored_pos = tmp_floored_pos[lid_index+I*16*16];
+                min_bounds_local_space = tmp_min_bounds_local_space[lid_index+I*16*16];
+                max_bounds_local_space = tmp_max_bounds_local_space[lid_index+I*16*16];
             } else {
                 if (dda_bitset(raw, ray_dir, ray_pos + ray_dir * (max(distance + 0.001, 0)), floored_pos, inv_dir, dir_sign, stats)) {
                     return true;
@@ -170,13 +195,15 @@ bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     Fetcher fetcher,
     half3 ray_dir,
     float3 ray_pos,
+    uint3 lid,
    //  out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
     out TraceStats stats,
 ) {
     stats = TraceStats(0, 0, 0);
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_multi_level<MIP_LEVELS - 3, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, 0, SIZE, inv_dir, dir_sign, 0, stats);
+    uint lid_index = lid.x + lid.y * 16;
+    return dda_multi_level<MIP_LEVELS - 3, hasFace, hasWorld, hasBlockPos, 0>(fetcher, ray_dir, ray_pos, lid_index, 0, SIZE, inv_dir, dir_sign, 0, stats);
 }
 
 bool dda<let N : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
