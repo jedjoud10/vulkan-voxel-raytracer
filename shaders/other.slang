@@ -58,51 +58,54 @@ public struct TraceStats {
 
 #define MAX(a, b)  (((a) > (b)) ? (a) : (b)) 
 
-bool dda_bitset<let tracing: bool>(
+bool dda_bitset<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool, let tracing: bool>(
     uint64_t raw,
-    half3 ray_dir,
+    float3 ray_dir,
     float3 ray_pos,
     float base_distance,
     int16_t3 block_pos,
-    half3 inv_dir,
+    float3 inv_dir,
     int8_t3 dir_sign,
-    out float distance,
+    bool3 parent_eqs,
+    out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
     inout Conditional<TraceStats, tracing> stats,
 ) {
-    distance = 0.0;
-
     if (raw == 0) {
         return false;
     }
 
     float3 modified_ray_pos = (ray_pos + ray_dir * base_distance) * 4.0;
     int3 floored_pos = (int3)floor(modified_ray_pos);
-    half3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     bool3 eqs = false;
+
+    bool now_inside = all((floored_pos / 4) == block_pos);
 
     [loop]
     for (uint8_t i = 0; i < 12; i++) {
-        if (any((floored_pos / 4) != block_pos)) {
+        if (all((floored_pos / 4) == block_pos)) {
+            now_inside = true;
+        }
+
+        if (any((floored_pos / 4) != block_pos) && now_inside) {
             break;
         }
         
         int3 local = floored_pos % 4;
         int bit_index = local.z + local.y * 4 + local.x * 4 * 4;
-        if (bit_index >= 0 && bit_index < 64 && ((raw >> bit_index) & 1) == 1) {
+        if (now_inside && bit_index >= 0 && bit_index < 64 && ((raw >> bit_index) & 1) == 1) {
             float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) / 4.0);
-            distance = base_distance + local_dist;
-            /*
+            float distance = base_distance + local_dist;
             output.world.set(ray_pos + ray_dir * distance);
             output.block_pos.set((uint3)floored_pos);
 
-            bool3 test_eqs = select(i == 0, parent_eqs, eqs);
+            bool3 test_eqs = eqs;
             output.face = firstbithigh(test_eqs.x | test_eqs.y << 1 | test_eqs.z << 2);
-            */
             return true;
         }
 
         eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
-        side_dist += select(eqs, (half3)1, (half3)0) * inv_dir;
+        side_dist += select(eqs, 1, 0) * inv_dir;
         floored_pos += select(eqs, 1, 0) * dir_sign;
 
         if (tracing) {
@@ -122,19 +125,19 @@ bool dda_bitset<let tracing: bool>(
 // MAX(K, 0) is the mip level
 bool dda_multi_level<let K : int16_t, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool, let tracing: bool>(
     Fetcher fetcher,
-    half3 ray_dir,
+    float3 ray_dir,
     float3 ray_pos,
     uint lid_index,
     uint16_t3 bounds_local_space,
-    half3 inv_dir,
+    float3 inv_dir,
     int8_t3 dir_sign,
     float base_distance,
-    out float output,
+    out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
     inout Conditional<TraceStats, tracing> stats,
 ) {
     float3 modified_ray_pos = (ray_pos + ray_dir * (base_distance - 0.01)) / (1 << MAX(K, 0));
     int16_t3 floored_pos = (int16_t3)floor(modified_ray_pos);
-    half3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     bool3 eqs = false;
 
     //int face_local = 0;
@@ -169,11 +172,11 @@ bool dda_multi_level<let K : int16_t, let hasFace : bool, let hasWorld : bool, l
             
                 uint16_t3 next_bounds_local_space = (uint16_t3)next_min_bounds_local_space | ((uint16_t3)next_max_bounds_local_space << 8);
 
-                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos, tracing>(fetcher, ray_dir, ray_pos, lid_index, next_bounds_local_space, inv_dir, dir_sign, max(distance - 0.001, 0), output, stats)) {
+                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos, tracing>(fetcher, ray_dir, ray_pos, lid_index, next_bounds_local_space, inv_dir, dir_sign, max(distance - 0.01, 0), output, stats)) {
                     return true;
                 }
             } else {
-                if (dda_bitset(raw, ray_dir, ray_pos, (max(distance - 0.001, 0)), floored_pos, inv_dir, dir_sign, output, stats)) {
+                if (dda_bitset(raw, ray_dir, ray_pos, (max(distance - 0.04, 0)), floored_pos, inv_dir, dir_sign, eqs, output, stats)) {
                     return true;
                 }
             }
@@ -209,35 +212,7 @@ bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     uint lid_index = lid.x + lid.y * 16;
-    float distance = 0.0;
-    bool hit = dda_multi_level<STARTING_LEVEL, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, lid_index, (uint16_t3(SIZE) << 8), inv_dir, dir_sign, 0, distance, stats);
-
-    float3 point_pos = (ray_pos + ray_dir * (distance - 0.05)) * 4.0;
-    int16_t3 floored_pos = (int16_t3)floor(point_pos);
-    float3 side_dist = ((dir_sign * (floored_pos - point_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
-    bool3 eqs = false;
-
-    [loop]
-    for (int i = 0; i < 4; i++) {
-        uint64_t raw = fetcher.fetch_raw(floored_pos / 4, 0);
-        int3 local = floored_pos % 4;
-        int bit_index = local.z + local.y * 4 + local.x * 4 * 4;
-        if (bit_index >= 0 && bit_index < 64 && ((raw >> bit_index) & 1) == 1) {
-            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) / 4.0);
-            distance = local_dist;
-
-            output.world.set(point_pos + ray_dir * distance);
-            output.block_pos.set((uint3)floored_pos);    
-            output.face = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-            return true;
-        }
-
-
-        eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
-        side_dist += select(eqs, (half3)1, (half3)0) * inv_dir;
-        floored_pos += select(eqs, 1, 0) * dir_sign;
-    }
-    return hit;
+    return dda_multi_level<STARTING_LEVEL, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, lid_index, (uint16_t3(SIZE) << 8), inv_dir, dir_sign, 0, output, stats);
 }
 
 bool dda<let N : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool>(
