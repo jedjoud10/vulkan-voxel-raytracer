@@ -15,11 +15,11 @@ float2 get_face_uvs(int face, float3 position) {
 
 int global_face_2(int face, float3 sign) {
     if (face == 0) {
-        return sign.x > 0 ? 3 : 0;
+        return sign.x < 0 ? 3 : 0;
     } else if (face == 1) {
-        return sign.y > 0 ? 4 : 1;
+        return sign.y < 0 ? 4 : 1;
     } else if (face == 2) {
-        return sign.z > 0 ? 5 : 2;
+        return sign.z < 0 ? 5 : 2;
     }
 
     return -1;

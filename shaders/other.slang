@@ -90,7 +90,8 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
             output.world.set(ray_pos + ray_dir * distance);
             //output.world.set(0.0);
             output.block_pos.set((uint3)floored_pos);
-
+            
+            /*
             bool3 test_eqs = eqs;
             output.face = firstbithigh(test_eqs.x | test_eqs.y << 1 | test_eqs.z << 2);
 
@@ -120,6 +121,7 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
             uint face_2_segment_index = exit_segment.x + exit_segment.y * 4;
 
             output.world.set(float3(face_1_segment_index / 16.0));
+            */
 
             /*
             float3 modified_ray_pos = (ray_pos + ray_dir * base_distance);
@@ -149,13 +151,6 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
 }
 
 uint face_pair_index(uint face_1, uint face_2) {
-    // swap so that face_2 is always greater (deduplicate step)
-    if (face_1 > face_2) {
-        let tmp = face_2;
-        face_2 = face_1;
-        face_1 = tmp;
-    }
-
     // what the fuck.... :(
     if (face_1 == 0 && face_2 == 1) {
         return 0;
@@ -188,6 +183,8 @@ uint face_pair_index(uint face_1, uint face_2) {
     } else if (face_1 == 4 && face_2 == 5) {
         return 14;
     }
+
+    printf("invalid pair! (%i, %i)", face_1, face_2);
 
     return -1;
 }
@@ -258,15 +255,38 @@ bool dda_bitset<let tracing: bool>(
         int exit_face = 0;
         ray_box_intersection_2(inv_dir, dir_sign, ray_pos, block_pos, block_pos + 1, tmin, tmax, entrance_face, exit_face);
 
-        float3 entrance = ray_pos + ray_dir * (tmin + 0.001);
-        float3 exit = ray_pos + ray_dir * (tmax - 0.001);
+        int global_entrance_face = global_face_2(entrance_face, dir_sign);
+        int global_exit_face = global_face_2(exit_face, -dir_sign);
+
+        int fst = global_entrance_face;
+        int snd = global_exit_face;
+        float fst_dst = tmin + 0.04;
+        float snd_dst = tmax - 0.04;
+
+
+        bool didswap = false;
+
+        // swap them around to uphold the fst < snd
+        if (fst > snd) {
+            int tmp = snd;
+            snd = fst;
+            fst = tmp;
+
+            float tmp2 = snd_dst;
+            snd_dst = fst_dst;
+            fst_dst = tmp2;
+
+            didswap = true;
+        }
+
+        float3 fst_world = ray_pos + ray_dir * fst_dst;
+        float3 snd_world = ray_pos + ray_dir * snd_dst;
         
         // convert coordinates to "cube" space (0..1)
-        entrance = entrance % 1;
-        exit = exit % 1;
+        fst_world = fst_world % 1;
+        snd_world = snd_world % 1;
 
-        // get the uvs according to the face id...
-        uint face_pair_index = face_pair_index(global_face_2(entrance_face, dir_sign), global_face_2(exit_face, -dir_sign));
+        uint face_pair_index = face_pair_index(fst, snd);
 
         // should never happen
         if (face_pair_index > 15) {
@@ -274,27 +294,31 @@ bool dda_bitset<let tracing: bool>(
             return false;
         }
 
-        float2 entrance_uvs = get_face_uvs(entrance_face, entrance);
-        float2 exit_uvs = get_face_uvs(exit_face, exit);
+        // get uvs
+        float2 fst_uvs = get_face_uvs(fst, fst_world);
+        float2 snd_uvs = get_face_uvs(snd, snd_world);
 
         // convert uvs to segment ids
-        uint2 entrance_segment = clamp((uint2)floor(entrance_uvs * 4), 0, 3);
-        uint2 exit_segment = clamp((uint2)floor(exit_uvs * 4), 0, 3);
+        uint2 fst_seg = clamp((uint2)floor(fst_uvs * 16), 0, 15);
+        uint2 snd_seg = clamp((uint2)floor(snd_uvs * 16), 0, 15);
 
-        uint face_1_segment_index = entrance_segment.x + entrance_segment.y * 4;
-        uint face_2_segment_index = exit_segment.x + exit_segment.y * 4;
+        uint fst_index = fst_seg.x + fst_seg.y * 16;
+        uint snd_index = snd_seg.x + snd_seg.y * 16;
 
-        uint index = face_pair_index << 8 | face_2_segment_index << 4 | face_1_segment_index;
+        uint index = face_pair_index << 16 | fst_index << 8 | snd_index;
+
 
         /*
 
         */
 
         // should never happen
+        /*
         if (index > 4096) {
             printf("%u", index);
             return false;
         }
+        */
         
 
         // check mask
@@ -306,11 +330,16 @@ bool dda_bitset<let tracing: bool>(
         */
 
         bool hit = (dda_precomputed[index] & raw) != 0;
-        if (hit && tracing) {
+        if (tracing) {
             TraceStats _stats = stats.get().value;
-            _stats.data = hash33(float3(index / 4096.0, 3.21212, 5.3434));
+            //_stats.data = fst_world % 1.0;
+            //_stats.data = countbits(dda_precomputed[index] & raw) / 12.0;
+            //printf("entry: %i exit: %i s1: %i s2: %i", entrance_face, exit_face, face_1_segment_index, face_2_segment_index);
+            _stats.data = float3(fst_index / 256.0, 0, 0);
+            //_stats.data = float3(fst_index / 256.0, snd_index / 256.0, face_pair_index / 15.0);
+            //_stats.data = global_face_2(entrance_face, dir_sign) / 6.0;
             stats.set(_stats);
-            //return true;
+            return true;
         }
 
         return (dda_precomputed[index] & raw) != 0;
