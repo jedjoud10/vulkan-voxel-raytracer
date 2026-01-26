@@ -1,6 +1,7 @@
 use std::{ffi::{CStr, CString}, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
+use rayon::{iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator}, slice::{ParallelSlice, ParallelSliceMut}};
 use vek::approx::AbsDiffEq;
 use crate::{pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 
@@ -160,16 +161,16 @@ const NUM_BITS_SEGMENTS: usize = 8;
 
 // segment iter size in one axis
 const SUBDIVISIONS: usize = 16;
-const TOTAL_SUBDIVIONS: usize = SUBDIVISIONS*SUBDIVISIONS;
+const SUBIDIVIONS_PER_FACE: usize = SUBDIVISIONS*SUBDIVISIONS;
 
 // pre-allocate the buffer
-const COUNT: usize = 1 << (NUM_BITS_FACE_PAIR+NUM_BITS_SEGMENTS+NUM_BITS_SEGMENTS); 
+const COUNT: usize = FACE_PAIRS.len() * SUBIDIVIONS_PER_FACE * SUBIDIVIONS_PER_FACE; 
 
 // add extra checks whenever we move in the space to make it more sensitive
 const WITH_RADIUS: bool = false;
 
 // strength applied to the [start, end] positions before we do DDA
-const NORMAL_INSET_STRENGTH: f32 = 0.008f32;
+const NORMAL_INSET_STRENGTH: f32 = 0.01f32;
 
 // enables the bits for a specific location
 fn enable_bitmask(position: vek::Vec3<i32>, mask: &mut u64) {
@@ -205,18 +206,18 @@ fn enable_bitmask(position: vek::Vec3<i32>, mask: &mut u64) {
 // input parameters are in world space
 // returns the bitmask of the visited nodes
 pub fn dda_bake_mask(
-    face: usize,
     ray_pos: vek::Vec3<f32>,
     ray_dir: vek::Vec3<f32>,
 ) -> u64 {
-    if face == 3 {
-        //log::debug!("ray_pos: {ray_pos}, ray_dir: {ray_dir}");
-
-    }
+    //log::debug!("ray_pos: {ray_pos}, ray_dir: {ray_dir}");
     let modified_ray_pos = ray_pos * 4.0f32;
     let mut floored_pos = modified_ray_pos.floor().as_::<i32>();
     let inv_dir = ray_dir.map(|x| x.abs().max(1e-10)).recip();
-    let dir_sign = ray_dir.map(|x| x.signum());
+    let dir_sign = ray_dir.map(|x| if x == 0.0 {
+        0.0
+    } else {
+        x.signum()
+    });
     let mut side_dist = ((dir_sign * (floored_pos.as_::<f32>() - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     let mut mask = 0u64;
 
@@ -225,18 +226,13 @@ pub fn dda_bake_mask(
 
     let mut within_volume = false;
 
-    for i in 0..3 {
-        if (face == 3) {
-            //log::debug!("iter: {i}, pos: {floored_pos}, side dist: {side_dist}");
-        }
-
+    for i in 0..16 {
         enable_bitmask(floored_pos, &mut mask);
         if floored_pos.partial_cmpge(&min).reduce_and() && floored_pos.partial_cmplt(&max).reduce_and() {
             within_volume = true;
         }
 
         if (floored_pos.partial_cmplt(&min).reduce_or() || floored_pos.partial_cmpge(&max).reduce_or()) && within_volume {
-            //log::debug!("break at {i}!");
             break;
         }
 
@@ -257,18 +253,14 @@ pub fn dda_bake_mask(
 pub fn bake_intersection(
     face_1: usize,
     face_2: usize,
-    masks: &mut Vec<u64>,
+    face_pair_index: usize,
+    slice: &mut [u64],
 ) {
-    // compute the face pair index 
-    let face_pair_index = face_pair_index(face_1, face_2);
-    assert!(face_pair_index < 15);
-    assert!(face_2 > face_1);
-
     // loop over all the segments in the first face
     for x_1 in 0..SUBDIVISIONS {
         for y_1 in 0..SUBDIVISIONS {
             let face_1_segment_index = x_1 + y_1 * SUBDIVISIONS;
-            assert!(face_1_segment_index < TOTAL_SUBDIVIONS);
+            assert!(face_1_segment_index < SUBIDIVIONS_PER_FACE);
 
             let half = (1.0f32 / SUBDIVISIONS as f32) * 0.5f32;
             let uv_1 = vek::Vec2::new(x_1, y_1).map(|i| i as f32 / SUBDIVISIONS as f32 + half);
@@ -278,25 +270,31 @@ pub fn bake_intersection(
             for x_2 in 0..SUBDIVISIONS {
                 for y_2 in 0..SUBDIVISIONS {
                     let face_2_segment_index = x_2 + y_2 * SUBDIVISIONS;
-                    assert!(face_2_segment_index < TOTAL_SUBDIVIONS);
+                    assert!(face_2_segment_index < SUBIDIVIONS_PER_FACE);
 
                     let uv_2 = vek::Vec2::new(x_2, y_2).map(|i| i as f32 / SUBDIVISIONS as f32 + half);
                     let end_position = unflatten_uv_offset(face_2, uv_2.x, uv_2.y) + FACE_NORMALS[face_2 as usize] * NORMAL_INSET_STRENGTH;
 
                     // create ray position and direction to look at the face
                     //log::debug!("start: {start_position}, end: {end_position}");
-                    let ray_dir = (end_position - start_position).normalized();
-                    let ray_pos = start_position;
+                    //let ray_dir = (end_position - start_position).normalized();
+                    //let ray_pos = start_position;
+                    let ray_dir = (start_position - end_position).normalized();
+                    let ray_pos = end_position;
 
                     // compute the index for this specific combination
+                    let local_index = face_1_segment_index << (NUM_BITS_SEGMENTS) | face_2_segment_index;
+                    
+                    /*
                     let index = face_pair_index << (NUM_BITS_SEGMENTS + NUM_BITS_SEGMENTS) | face_1_segment_index << (NUM_BITS_SEGMENTS) | face_2_segment_index;
                     assert!(index < COUNT);
-                    
+                    */
+                                        
                     // our index *must* be unique
-                    assert_eq!(masks[index], u64::MIN);
+                    assert_eq!(slice[local_index], u64::MIN);
                     
                     // get the mask and add it to our list
-                    let mut mask = dda_bake_mask(face_2, ray_pos, ray_dir);
+                    let mask = dda_bake_mask(ray_pos, ray_dir);
 
                     /*
                     // Due to floating point precision, it is NOT symmetric! Bruh!
@@ -309,6 +307,13 @@ pub fn bake_intersection(
                         //let mask2 = dda_bake_mask(face_2, ray_pos2, ray_dir2);
                         //assert_eq!(mask, mask2);
                     }
+                    /*
+                    if (ray_dir.map(|x| x == 0.0).reduce_or()) {
+                        mask = 0;
+                    } else {
+                        mask = u64::MAX;
+                    }
+                    */
                     
                     // we *must* have hit something...
                     //assert_ne!(mask, 0);
@@ -322,7 +327,8 @@ pub fn bake_intersection(
                     dda_test(0x13_42_AF_03_20_40_EF_01, mask, ray_pos, ray_dir);
                     */
 
-                    masks[index] = mask;
+                    slice[local_index] = mask;
+                    //masks[index] = mask;
                 }
             }
         }
@@ -332,12 +338,30 @@ pub fn bake_intersection(
 // does all the intersection tests between two faces
 pub fn bake_all() -> Vec<u64> {
     log::info!("baking micro-voxel buffer...");
-    let mut masks =  (0..COUNT).into_iter().map(|_| 0u64).collect::<Vec<_>>();
+    let mut masks = (0..COUNT).into_iter().map(|_| 0u64).collect::<Vec<_>>();
 
-    for (face_1, face_2) in FACE_PAIRS {
-        log::info!("baking intersection (f1: {face_1}, f2: {face_2})");
-        bake_intersection(face_1, face_2, &mut masks);
-    }
+    // each pair will have a slice of the total mask to work on. meaning we can employ parallelism pretty easily
+    let slice_size = ((1 << (NUM_BITS_SEGMENTS + NUM_BITS_SEGMENTS)));
+    assert_eq!(masks.len() / slice_size, FACE_PAIRS.len());
+    assert_eq!(masks.len() % slice_size, 0);
+
+    let iterator = masks.par_chunks_exact_mut(slice_size).enumerate();
+    
+    let instant = std::time::Instant::now();
+    iterator.for_each(|(face_pair_index, slice)| {
+        assert_eq!(slice.len(), slice_size);
+
+        let (face_1, face_2) = FACE_PAIRS[face_pair_index];
+        assert!(face_pair_index < 15);
+        assert!(face_2 > face_1);
+
+        log::info!("baking intersection (f1: {face_1}, f2: {face_2}), pair index: {face_pair_index}");
+        bake_intersection(face_1, face_2, face_pair_index, slice);
+    });
+
+    let now = std::time::Instant::now();
+    let elapsed = (now - instant).as_millis();
+    log::info!("took {elapsed}ms to bake buffer of size {COUNT}");
 
     masks
 }
@@ -355,4 +379,32 @@ pub unsafe fn create_dda_precomputed_buffer(
     crate::buffer::write_to_buffer(device, pool, queue, buffer.buffer, allocator, data);
     
     return buffer;
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_uv_unflatten() {
+        assert_eq!(unflatten_uv_offset(0, 0f32, 0f32).x, 0.0);
+        assert_eq!(unflatten_uv_offset(3, 0f32, 0f32).x, 1.0);
+
+        assert_eq!(unflatten_uv_offset(1, 0f32, 0f32).y, 0.0);
+        assert_eq!(unflatten_uv_offset(4, 0f32, 0f32).y, 1.0);
+
+        assert_eq!(unflatten_uv_offset(2, 0f32, 0f32).z, 0.0);
+        assert_eq!(unflatten_uv_offset(5, 0f32, 0f32).z, 1.0);
+    }
+
+    #[test]
+    fn check_normals() {
+        assert_eq!(FACE_NORMALS[0].x, -1.0);
+        assert_eq!(FACE_NORMALS[3].x, 1.0);
+
+        assert_eq!(FACE_NORMALS[1].y, -1.0);
+        assert_eq!(FACE_NORMALS[4].y, 1.0);
+
+        assert_eq!(FACE_NORMALS[2].z, -1.0);
+        assert_eq!(FACE_NORMALS[5].z, 1.0);
+    }
 }

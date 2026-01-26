@@ -68,6 +68,7 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
     int8_t3 dir_sign,
     out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
 ) {
+    return;
     float3 modified_ray_pos = (ray_pos + ray_dir * base_distance) * 4.0;
     int3 floored_pos = (int3)floor(modified_ray_pos);
     uint8_t3 block_pos = (uint8_t3)(floored_pos / 4);
@@ -88,12 +89,11 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
             float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) / 4.0);
             float distance = base_distance + local_dist;
             output.world.set(ray_pos + ray_dir * distance);
-            //output.world.set(0.0);
             output.block_pos.set((uint3)floored_pos);
-            
-            /*
             bool3 test_eqs = eqs;
             output.face = firstbithigh(test_eqs.x | test_eqs.y << 1 | test_eqs.z << 2);
+            
+            /*
 
             float tmin = 0.0;
             float tmax = 0.0;
@@ -151,6 +151,15 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
 }
 
 uint face_pair_index(uint face_1, uint face_2) {
+    return face_1 * (11 - face_1) / 2 + (face_2 - face_1 - 1);
+    /*
+    if (face_1 > face_2) {
+        uint tmp = face_1;
+        face_1 = face_2;
+        face_2 = tmp;
+    }
+    */
+
     // what the fuck.... :(
     if (face_1 == 0 && face_2 == 1) {
         return 0;
@@ -195,34 +204,42 @@ uint get_precomputed_index(float3 ray_pos, half3 ray_dir, half3 inv_dir, int8_t3
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     
     bool3 eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
-    int entrance_face = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+    int entrance_face = global_face_2(firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2), dir_sign);
     side_dist += select(eqs, inv_dir, 0.0);
 
     float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir));
     float3 entrance = ray_pos + ray_dir * (local_dist + base_distance + 0.1);
     entrance = entrance % 1.0;
     float2 entrance_uvs = get_face_uvs(entrance_face, entrance);
-    uint2 entrance_segment = (uint2)floor(entrance_uvs * 4);        
-
-
+    uint2 entrance_segment = (uint2)floor(entrance_uvs * 16);        
+    uint face_1_segment_index = entrance_segment.x + entrance_segment.y * 16;
     
     eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
-    int exit_face = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+    int exit_face = global_face_2(firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2), -dir_sign);
     side_dist += select(eqs, inv_dir, 0.0);
     
     local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir));
     float3 exit = ray_pos + ray_dir * (local_dist + base_distance - 0.1);
     exit = exit % 1.0;
     float2 exit_uvs = get_face_uvs(exit_face, exit);
-    uint2 exit_segment = (uint2)floor(exit_uvs * 4);
+    uint2 exit_segment = (uint2)floor(exit_uvs * 16);
+    uint face_2_segment_index = exit_segment.x + exit_segment.y * 16;
+
+    if (entrance_face > exit_face) {
+        int tmp = exit_face;
+        exit_face = entrance_face;
+        entrance_face = tmp;
+
+        float tmp2 = face_2_segment_index;
+        face_2_segment_index = face_1_segment_index;
+        face_1_segment_index = tmp2;
+    }
 
     // convert to indices
     uint face_pair_index = face_pair_index(entrance_face, exit_face);
-    uint face_1_segment_index = entrance_segment.x + entrance_segment.y * 4;
-    uint face_2_segment_index = exit_segment.x + exit_segment.y * 4;
 
     // convert to lookup index
-    return face_pair_index << 8 | face_1_segment_index << 4 | face_2_segment_index;
+    return face_pair_index << 16 | face_1_segment_index << 8 | face_2_segment_index;
 }
 
 static const bool FUNKY = true; 
@@ -238,7 +255,6 @@ bool dda_bitset<let tracing: bool>(
     StructuredBuffer<uint64_t> dda_precomputed,
     inout Conditional<TraceStats, tracing> stats,
 ) {
-    //return true;
 
     if (raw == 0) {
         return false;
@@ -251,100 +267,77 @@ bool dda_bitset<let tracing: bool>(
     if (FUNKY) {
         float tmin = 0.0;
         float tmax = 0.0;
-        int entrance_face = 0;
-        int exit_face = 0;
+        uint8_t entrance_face = 0;
+        uint8_t exit_face = 0;
         ray_box_intersection_2(inv_dir, dir_sign, ray_pos, block_pos, block_pos + 1, tmin, tmax, entrance_face, exit_face);
 
-        int global_entrance_face = global_face_2(entrance_face, dir_sign);
-        int global_exit_face = global_face_2(exit_face, -dir_sign);
+        uint8_t global_entrance_face = global_face_2(entrance_face, dir_sign);
+        uint8_t global_exit_face = global_face_2(exit_face, -dir_sign);
 
-        int fst = global_entrance_face;
-        int snd = global_exit_face;
-        float fst_dst = tmin + 0.04;
-        float snd_dst = tmax - 0.04;
+        uint8_t fst = global_entrance_face;
+        uint8_t snd = global_exit_face;
+        float fst_dst = tmin + 0.001;
+        float snd_dst = tmax - 0.001;
 
-
-        bool didswap = false;
-
-        /*
         // swap them around to uphold the fst < snd
         if (fst > snd) {
-            int tmp = snd;
+            uint8_t tmp = snd;
             snd = fst;
             fst = tmp;
 
             float tmp2 = snd_dst;
             snd_dst = fst_dst;
             fst_dst = tmp2;
-
-            didswap = true;
         }
-        */
 
-        float3 fst_world = ray_pos + ray_dir * fst_dst;
-        float3 snd_world = ray_pos + ray_dir * snd_dst;
-        
-        // convert coordinates to "cube" space (0..1)
-        fst_world = fst_world % 1;
-        snd_world = snd_world % 1;
+        static const uint8_t SUBDIVISIONS = 16; 
+        static const int BITS_PER_FACE_SEGMENT = 8; 
 
+        // TODO: something wrong here! I don't know what!
         uint face_pair_index = face_pair_index(fst, snd);
 
-        // should never happen
-        if (face_pair_index > 15) {
-            printf("%u", face_pair_index);
-            return false;
-        }
-
-        // get uvs
+        float3 fst_world = (ray_pos + ray_dir * fst_dst) % 1;
         float2 fst_uvs = get_face_uvs(fst, fst_world);
+        uint8_t2 fst_seg = (uint8_t2)clamp((uint8_t2)floor(fst_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
+        uint8_t fst_index = fst_seg.x + fst_seg.y * SUBDIVISIONS;
+
+        float3 snd_world = (ray_pos + ray_dir * snd_dst) % 1;
         float2 snd_uvs = get_face_uvs(snd, snd_world);
-
-        // convert uvs to segment ids
-        uint2 fst_seg = clamp((uint2)floor(fst_uvs * 16), 0, 15);
-        uint2 snd_seg = clamp((uint2)floor(snd_uvs * 16), 0, 15);
-
-        uint fst_index = fst_seg.x + fst_seg.y * 16;
-        uint snd_index = snd_seg.x + snd_seg.y * 16;
-
-        uint index = face_pair_index << 16 | fst_index << 8 | snd_index;
-
-
-        /*
-
-        */
-
-        // should never happen
-        /*
-        if (index > 4096) {
-            printf("%u", index);
-            return false;
-        }
-        */
+        uint8_t2 snd_seg = (uint8_t2)clamp((uint8_t2)floor(snd_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
+        uint8_t snd_index = snd_seg.x + snd_seg.y * SUBDIVISIONS;
         
+        uint index = face_pair_index << (BITS_PER_FACE_SEGMENT + BITS_PER_FACE_SEGMENT) | (uint)fst_index << BITS_PER_FACE_SEGMENT | snd_index;
+
+        /*
+
+        */
 
         // check mask
-        //uint index = get_precomputed_index(ray_pos, ray_dir, inv_dir, dir_sign, base_distance);
+        //index = get_precomputed_index(ray_pos, ray_dir, inv_dir, dir_sign, base_distance);
         /*
         if ((dda_precomputed[index] & raw) == 0) {
             return false;
         }
         */
 
-        bool hit = (dda_precomputed[index] & raw) != 0;
-        if (tracing) {
+        bool hit = (dda_precomputed.Load(index) & raw) != 0;
+        return hit;
+
+        /*
+        if (tracing && hit) {
             TraceStats _stats = stats.get().value;
-            //_stats.data = fst_world % 1.0;
+            _stats.data = fst_index / 256.0;
             //_stats.data = countbits(dda_precomputed[index] & raw) / 12.0;
             //printf("entry: %i exit: %i s1: %i s2: %i", entrance_face, exit_face, face_1_segment_index, face_2_segment_index);
-            _stats.data = float3(snd_seg.x / 16.0, fst_seg.x / 16.0, 0);
+            //_stats.data = float3(snd_seg.x / 16.0, fst_seg.x / 16.0, 0);
             //_stats.data = float3(fst_index / 256.0, snd_index / 256.0, face_pair_index / 15.0);
             //_stats.data = global_face_2(entrance_face, dir_sign) / 6.0;
             stats.set(_stats);
-            return true;
+            return hit;
         }
 
         return (dda_precomputed[index] & raw) != 0;
+        */
     } 
     
     float3 modified_ray_pos = (ray_pos + ray_dir * base_distance) * 4.0;
@@ -474,6 +467,7 @@ bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
     out Conditional<TraceStats, tracing> stats,
 ) {
+    //return dda<128, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, output);
     stats.set(TraceStats(0, 0, 0));
 
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
@@ -494,7 +488,6 @@ bool dda<let N : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
     float3 ray_dir,
     float3 ray_pos,
     out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
-    inout TraceStats stats,
 ) {
     float3 floored_pos = floor(ray_pos);
     float3 inv_dir = 1 / abs(ray_dir);
@@ -519,12 +512,10 @@ bool dda<let N : int, let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
 
         //distance += min3(reconst.x, reconst.y, reconst.z);
         //face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-        stats.total_iterations += 1;
 
     }
 
     float d = length((eqs) * (side_dist - inv_dir));
-    stats.data = d;
     output.world = ray_pos + ray_dir * d;
     output.block_pos = (uint3)floored_pos;
     

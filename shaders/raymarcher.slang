@@ -135,9 +135,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             break;
         case DebugType.Recursions:
             //col = distance(ray_pos, thingy.world.get().value) / 10.0;
-            col = stats.data;
+            //col = stats.data;
             //col = thingy.world.get().value % 10.0 / 10.0;
-            //col = hit ? 1 : 0;
+            col = hit ? 1 : 0;
             break;
         case DebugType.Timer:
             uint clock = getRealtimeClock().x;
