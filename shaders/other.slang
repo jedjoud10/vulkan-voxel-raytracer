@@ -266,6 +266,7 @@ bool dda_bitset<let tracing: bool>(
 
         bool didswap = false;
 
+        /*
         // swap them around to uphold the fst < snd
         if (fst > snd) {
             int tmp = snd;
@@ -278,6 +279,7 @@ bool dda_bitset<let tracing: bool>(
 
             didswap = true;
         }
+        */
 
         float3 fst_world = ray_pos + ray_dir * fst_dst;
         float3 snd_world = ray_pos + ray_dir * snd_dst;
@@ -335,7 +337,7 @@ bool dda_bitset<let tracing: bool>(
             //_stats.data = fst_world % 1.0;
             //_stats.data = countbits(dda_precomputed[index] & raw) / 12.0;
             //printf("entry: %i exit: %i s1: %i s2: %i", entrance_face, exit_face, face_1_segment_index, face_2_segment_index);
-            _stats.data = float3(fst_index / 256.0, 0, 0);
+            _stats.data = float3(snd_seg.x / 16.0, fst_seg.x / 16.0, 0);
             //_stats.data = float3(fst_index / 256.0, snd_index / 256.0, face_pair_index / 15.0);
             //_stats.data = global_face_2(entrance_face, dir_sign) / 6.0;
             stats.set(_stats);
