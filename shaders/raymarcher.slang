@@ -98,7 +98,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         per_clock = getRealtimeClock().x;
     }
     
-    hit = dda_traverse<true, true, true, true>(fetcher, ray_dir, ray_pos, lid, dda_precomputed, thingy, _stats);
+    DdaTraversalOutput hit2 = dda_traverse_far_low_quality(fetcher, ray_dir, ray_pos);
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -114,15 +114,18 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     //
     TraceStats stats = _stats.get().value;
     float3 col = 0;
+    //col = (float3)hit2.block_pos % 4 / 4.0;
+    //col = ((float3)thingy.block_pos.get().value % 4) / 4.0;
     switch (debug_type) {
         case DebugType.Combined:
-            col = stats.recursions / 64.0;    
+            col = ((float3)hit2.block_pos % 4) / 4.0;
+            //col = stats.recursions / 64.0;    
             //col = ((ray_pos + ray_dir * stats.data - 0.01) % 1.0);    
             //col = stats.pause_resumes / 8.0;
             //col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
             break;
         case DebugType.FullHalt:
-            col = abs(get_face_normal(thingy.face.get().value, sign(ray_dir)));
+            col = abs(get_face_normal(hit2.face, sign(ray_dir)));
             //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
             break;
@@ -136,8 +139,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         case DebugType.Recursions:
             //col = distance(ray_pos, thingy.world.get().value) / 10.0;
             //col = stats.data;
-            //col = thingy.world.get().value % 10.0 / 10.0;
-            col = hit ? 1 : 0;
+            //col = (hit ? 1 : 0) * (thingy.world.get().value % 10.0 / 10.0);
             break;
         case DebugType.Timer:
             uint clock = getRealtimeClock().x;
@@ -157,7 +159,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             //col = hit ? 1 : 0;
             break;
     }
-
+    
     output[id.xy] = float4(col, 0);
     //output[id.xy] = float4(hit ? 1 : 0);
     //output[id.xy] = float4(world % 10 / 10.0, 0);

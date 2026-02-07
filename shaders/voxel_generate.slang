@@ -52,17 +52,43 @@ void main(uint3 id: SV_DispatchThreadID) {
     voxels[id] = raw;
 }
 
+
+public static const uint64_t[] LOCAL_MASKS_2x2x2 = {
+            0x330033,
+            0xcc00cc,
+          0x33003300,
+          0xcc00cc00,
+    0x33003300000000,
+    0xcc00cc00000000,
+    0x3300330000000000,
+    0xcc00cc0000000000,
+};
+
+
 [shader("compute")]
 [numthreads(8, 8, 8)]
 void propagateMipMaps(uint3 id: SV_DispatchThreadID) {
-    bool has_any = false;
-    bool has_all = false;
+    uint64_t mask = 0;
 
 	for (int x = 0; x < 2; x++) {
 		for (int y = 0; y < 2; y++) {
 			for (int z = 0; z < 2; z++) {
                 uint3 pos = id * 2 + uint3(x, y, z);
-                has_any |= prev_mipmapped_voxels[pos] != 0;
+
+                for (int lx = 0; lx < 2; lx++) {
+		            for (int ly = 0; ly < 2; ly++) {
+			            for (int lz = 0; lz < 2; lz++) {
+                            uint64_t local_mask = LOCAL_MASKS_2x2x2[lz + ly * 2 + lx * 2 * 2];
+
+                            if ((prev_mipmapped_voxels[pos] & local_mask) != 0) {
+                                int3 fuck = int3(x, y, z) * 2 + int3(lx, ly, lz);
+                                int index = fuck.z + fuck.y * 4 + fuck.x * 4 *4;
+                                mask |= 1 << index;
+                            }
+                        }
+                    }
+                }
+
                 /*
                 bool is_full_voxel = (prev_mipmapped_voxels[pos] & 1) == 1;
                 bool was_propagated_any = (prev_mipmapped_voxels[pos] & 2) == 2;
@@ -74,7 +100,7 @@ void propagateMipMaps(uint3 id: SV_DispatchThreadID) {
         }
     }
 
-    next_mipmapped_voxels[id] = (uint64_t)((has_any ? 2 : 0) | (has_all ? 4 : 0));
+    next_mipmapped_voxels[id] = mask;
 }
 
 [shader("compute")]

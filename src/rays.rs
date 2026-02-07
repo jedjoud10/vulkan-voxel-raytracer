@@ -337,6 +337,26 @@ pub fn bake_intersection(
 
 // does all the intersection tests between two faces
 pub fn bake_all() -> Vec<u64> {
+    for x in 0..2 {
+        for y in 0..2 {
+            for z in 0..2 {
+                let mut mask = 0u64;
+
+                for x2 in 0..2 {
+                    for y2 in 0..2 {
+                        for z2 in 0..2 {
+                            let pos = vek::Vec3::new(x, y, z) * 2 + vek::Vec3::new(x2, y2, z2);
+                            let index = pos.z + pos.y * 4 + pos.x * 4 *4;
+                            mask |= 1 << index;
+                        }
+                    }
+                }
+
+                println!("{:#16x}", mask);
+            }
+        }
+    }
+
     log::info!("baking micro-voxel buffer...");
     let mut masks = (0..COUNT).into_iter().map(|_| 0u64).collect::<Vec<_>>();
 
