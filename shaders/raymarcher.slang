@@ -17,7 +17,7 @@ Texture3D<uint> voxels_indices;
 [[vk::binding(4, 0)]]
 StructuredBuffer<uint64_t> dda_precomputed;
 
-[SpecializationConstant] const bool USE_PIXELATED_SHADOWS = true;
+[SpecializationConstant] const bool USE_PIXELATED_SHADOWS = false;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
 [SpecializationConstant] const bool USE_NOISY_REFRACTIONS_REFLECTIONS = false;
 
@@ -99,6 +99,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     }
     
     DdaTraversalOutput hit2 = dda_traverse_far_low_quality(fetcher, ray_dir, ray_pos);
+    hit = hit2.hit;
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -128,6 +129,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             //col = abs(get_face_normal(hit2.face, sign(ray_dir)));
             //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
+            col = hit ? 1 : 0;
             break;
         case DebugType.Iterations:
             if (stats.total_iterations < 256.0) {
@@ -155,27 +157,35 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             col = (max_clock - min_clock) / 1024.0;
             break;
         case DebugType.World:
-            col = stats.data;
+            //col = hit2.world % 10.0 / 10.0;
             //col = hit ? 1 : 0;
             break;
     }
     
     output[id.xy] = float4(col, 0);
+    return;
+    //return;
     //output[id.xy] = float4(hit ? 1 : 0);
     //output[id.xy] = float4(world % 10 / 10.0, 0);
-    return;
 
     int face = 0;
     float3 world = 0;
     float3 normal = 0;
     uint3 block_pos = 0;
     float3 block_uvs = 0;
+
+    face = hit2.face;
+    world = hit2.world;
+    normal = get_face_normal(face, dir_sign);
+    block_pos = hit2.block_pos;
+    block_uvs = world - block_pos;
+
     /*
-    int face = (int)thingy.face.get().value;
-    float3 world = thingy.world.get().value;
-    float3 normal = get_face_normal(face, dir_sign);
-    uint3 block_pos = (uint3)thingy.block_pos.get().value;
-    float3 block_uvs = world - block_pos;
+    face = (int)thingy.face.get().value;
+    world = thingy.world.get().value;
+    normal = get_face_normal(face, dir_sign);
+    block_pos = (uint3)thingy.block_pos.get().value;
+    block_uvs = world - block_pos;
     */
     bool lastWasAir = true;
 
@@ -293,7 +303,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
                 shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
             }
         } else {
-            shadow = dda_shadownate(fetcher, sun.xyz, world + sun.xyz * 0.01);
+            shadow = 1.0;
+            //shadow = dda<64>(fetcher, sun.xyz, world + sun.xyz * 0.05) ? 0.0 : 1.0;
+            //shadow = dda_shadownate(fetcher, sun.xyz, world + sun.xyz * 0.01);
         }
         
         ao_solver solver;
@@ -327,18 +339,19 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         float3 sky_reflected_dir = reflect(ray_dir, normal);
         bool top_face = normal.y > 0.5;
         bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
-        float3 diffuse = (top_pixels ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
+        float3 diffuse = (top_face ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
 
         float sky_visibility = 1.0;
         /*
         float sky_visibility = 0.0;
 
-        for (int k = 0; k < 8; k++) {
-            float3 dir = normalize(sky_reflected_dir + (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0) * 0.2);
+        for (int k = 0; k < 2; k++) {
+            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+            float3 dir = normalize(sky_reflected_dir + rng * 0.4);
             sky_visibility += dda<8>(fetcher, dir, world + dir * 0.1) ? 0 : 1;
         }
 
-        sky_visibility /= 8.0;
+        sky_visibility /= 2.0;
         */
         
         
