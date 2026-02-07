@@ -263,7 +263,7 @@ pub fn bake_intersection(
             assert!(face_1_segment_index < SUBIDIVIONS_PER_FACE);
 
             let half = (1.0f32 / SUBDIVISIONS as f32) * 0.5f32;
-            let uv_1 = vek::Vec2::new(x_1, y_1).map(|i| i as f32 / SUBDIVISIONS as f32 + half);
+            let uv_1 = vek::Vec2::new(x_1, y_1).map(|i| i as f32 / SUBDIVISIONS as f32 + half) + 1e-5;
             let start_position = unflatten_uv_offset(face_1, uv_1.x, uv_1.y) + FACE_NORMALS[face_1 as usize] * NORMAL_INSET_STRENGTH;
 
             // loop over all the segments in the second face
@@ -272,7 +272,7 @@ pub fn bake_intersection(
                     let face_2_segment_index = x_2 + y_2 * SUBDIVISIONS;
                     assert!(face_2_segment_index < SUBIDIVIONS_PER_FACE);
 
-                    let uv_2 = vek::Vec2::new(x_2, y_2).map(|i| i as f32 / SUBDIVISIONS as f32 + half);
+                    let uv_2 = vek::Vec2::new(x_2, y_2).map(|i| i as f32 / SUBDIVISIONS as f32 + half) + 1e-5;
                     let end_position = unflatten_uv_offset(face_2, uv_2.x, uv_2.y) + FACE_NORMALS[face_2 as usize] * NORMAL_INSET_STRENGTH;
 
                     // create ray position and direction to look at the face

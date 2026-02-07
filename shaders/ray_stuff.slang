@@ -1,20 +1,37 @@
-/*
 #include <stack.slang>
 
-[[vk::binding(0, 0)]]
-Texture3D<uint8_t> voxels;
-
+/*
 struct Ray {
-    float3 ray_direction;
-    uint16_t2 source_pixel;
-    uint packed_target_screen_coordinate; // 16 bits for the x coord, 16 bits for the y coord
+    float3 pos;
+    float3 dir;
+    float3 abs_inv_dir;
+    int3 dir_sign;
+    uint2 coord;
 }
+
+struct StackElement {
+    float3 side_dist;
+    int3 floored_pos;
+    int depth;
+
+    StackElement create(float3 ray_pos, float3 dir, float3 inv_dir, int3 dir_sign, float distance, int depth) {
+        float3 modified_ray_pos = (ray_pos + dir * distance) / (1 << depth);  
+        int3 floored_pos = (int3)floor(modified_ray_pos);
+        float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    }
+}
+
+[[vk::binding(0, 0)]]
+Texture3D<uint64_t> voxels;
 
 [[vk::binding(1, 0)]]
 RWStructuredBuffer<Ray> rays;
 
 [[vk::binding(2, 0)]]
-RWStructuredBuffer<Stack<12, uint>> stacks;
+RWStructuredBuffer<StackElement> stacks;
+
+[[vk::binding(3, 0)]]
+RWStructuredBuffer<uint8_t> stack_lengths;
 
 [[vk::binding(3, 0)]]
 RWStructuredBuffer<Atomic<uint>> ray_counter;
@@ -32,7 +49,11 @@ void generate_rays(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform
 
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     int index = ray_counter[0].increment(MemoryOrder.Relaxed);
-    rays[index] = Ray(ray_dir, (uint16_t2)id.xy);
+    rays[index] = Ray(position.xyz, ray_dir, 1.0 / ray_dir, id.xy);
+
+    // add the root node to the stack to be traversed
+    stack_lengths[index].add(1);
+    stacks[index] = StackElement();
 }
 
 [shader("compute")]
@@ -40,8 +61,9 @@ void generate_rays(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform
 void trace_rays(uint3 id: SV_DispatchThreadID, uniform float4 position) {
     Ray ray = rays[id.x];
 
-    // check the stack and fetch the closest node
-
+    // do the ray trace for a SINGLE octree level
+    // if we hit a node, add it to the stack (for the next iteration) and exit immediately
+    // if not, set this ray as "missed"
 }
 
 [shader("compute")]
@@ -52,5 +74,4 @@ void repack_rays(uint3 id: SV_DispatchThreadID, uniform float4 position) {
 
     // only start counting for complete rays
 }
-
 */

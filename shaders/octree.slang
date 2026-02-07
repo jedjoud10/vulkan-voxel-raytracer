@@ -14,18 +14,48 @@ float2 get_face_uvs(int face, float3 position) {
     return -1;
 }
 
-uint8_t global_face_2(uint8_t face, int8_t3 sign) {
-    if (face == 0) {
-        return sign.x < 0 ? 3 : 0;
-    } else if (face == 1) {
-        return sign.y < 0 ? 4 : 1;
-    } else if (face == 2) {
-        return sign.z < 0 ? 5 : 2;
-    }
-
-    return -1;
+uint8_t global_face_2(uint8_t axis, int8_t3 sign) {
+    return sign[axis] < 0 ? (axis + 3) : axis;
 }
 
+// https://tavianator.com/2022/ray_box_boundary.html
+bool ray_box_intersection_2(
+    half3 inv_dir,
+    int8_t3 dir_sign,
+    float3 ray_pos,
+    int16_t3 aabb_min,
+    int16_t3 aabb_max,
+    out float tmin,
+    out float tmax,
+    out uint8_t entrance_face_axis,
+    out uint8_t exit_face_axis, 
+) {
+    tmin = 0.0;
+    tmax = 999999;
+
+    for (int i = 0; i < 3; i++) {
+        bool sign = dir_sign[i] > 0;
+        float bmin = select(sign, aabb_min[i], aabb_max[i]);
+        float bmax = select(!sign, aabb_min[i], aabb_max[i]);
+
+        float dmin = (bmin - ray_pos[i]) * inv_dir[i] * dir_sign[i];
+        float dmax = (bmax - ray_pos[i]) * inv_dir[i] * dir_sign[i];
+
+        if (dmin > tmin) {
+            entrance_face_axis = i;
+            tmin = dmin;
+        }
+        
+        if (dmax < tmax) {
+            exit_face_axis = i;
+            tmax = dmax;
+        }
+    }
+
+    return tmin < tmax;
+}
+
+/*
 // https://tavianator.com/2022/ray_box_boundary.html
 bool ray_box_intersection_2(
     float3 inv_dir,
@@ -51,48 +81,6 @@ bool ray_box_intersection_2(
 
     entrance_face_axis = (uint8_t)firstbithigh(test_1.x | test_1.y << 1 | test_1.z << 2);
     exit_face_axis = (uint8_t)firstbithigh(test_2.x | test_2.y << 1 | test_2.z << 2);
-
-    tmin = max(max3(_min.x, _min.y, _min.z), tmin);
-    tmax = min(min3(_max.x, _max.y, _max.z), tmax);
-
-    _tmin = tmin;
-    _tmax = tmax;
-
-    return tmin < tmax;
-}
-
-/*
-bool ray_box_intersection_3(
-    float3 inv_dir,
-    float3 dir_sign,
-    float3 ray_pos,
-    float3x2 aabb,
-    out float2 _tbounds,
-    out int2 faces_axii, 
-) {
-    float tmin = 0.0, tmax = 999999;
-
-    float3x2 pos = float3x2(
-        float2(ray_pos.x),
-        float2(ray_pos.y),
-        float2(ray_pos.z),
-    );
-
-    var k = (aabb - pos);
-    float3x2 t = mul(k, inv_dir * dir_sign);
-    
-
-    float3 t1 = (aabb_min - ray_pos) * inv_dir * dir_sign;
-    float3 t2 = (aabb_max - ray_pos) * inv_dir * dir_sign;
-
-    float3 _min = min(t1, t2);
-    float3 _max = max(t1, t2);
-
-    bool3 test_1 = max3(_min.x, _min.y, _min.z) == _min;
-    bool3 test_2 = min3(_max.x, _max.y, _max.z) == _max;
-
-    entrance_face_axis = firstbithigh(test_1.x | test_1.y << 1 | test_1.z << 2);
-    exit_face_axis = firstbithigh(test_2.x | test_2.y << 1 | test_2.z << 2);
 
     tmin = max(max3(_min.x, _min.y, _min.z), tmin);
     tmax = min(min3(_max.x, _max.y, _max.z), tmax);

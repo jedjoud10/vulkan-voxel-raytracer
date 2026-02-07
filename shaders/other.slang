@@ -31,7 +31,7 @@ struct Fetcher {
 }
 
 static const uint8_t STARTING_LEVEL = MIP_LEVELS - 3;
-static const uint8_t LEVEL_DIFF = 3;
+static const uint8_t LEVEL_DIFF = 2;
 static const uint8_t DDA_STEPS = 24;
 
 public struct MultiLevelThingyOutput<bool hasFace, bool hasWorld, bool hasBlockPos>  {
@@ -68,7 +68,6 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
     int8_t3 dir_sign,
     out MultiLevelThingyOutput<hasFace, hasWorld, hasBlockPos> output,
 ) {
-    return;
     float3 modified_ray_pos = (ray_pos + ray_dir * base_distance) * 4.0;
     int3 floored_pos = (int3)floor(modified_ray_pos);
     uint8_t3 block_pos = (uint8_t3)(floored_pos / 4);
@@ -91,7 +90,7 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
             output.world.set(ray_pos + ray_dir * distance);
             output.block_pos.set((uint3)floored_pos);
             bool3 test_eqs = eqs;
-            output.face = firstbithigh(test_eqs.x | test_eqs.y << 1 | test_eqs.z << 2);
+            output.face.set(firstbithigh(test_eqs.x | test_eqs.y << 1 | test_eqs.z << 2));
             
             /*
 
@@ -150,52 +149,36 @@ void dda_bitset_final<let hasFace : bool, let hasWorld : bool, let hasBlockPos: 
     }
 }
 
-uint face_pair_index(uint face_1, uint face_2) {
+uint8_t face_pair_index(uint8_t face_1, uint8_t face_2) {
+    // i love gpt (this works)
     return face_1 * (11 - face_1) / 2 + (face_2 - face_1 - 1);
-    /*
-    if (face_1 > face_2) {
-        uint tmp = face_1;
-        face_1 = face_2;
-        face_2 = tmp;
-    }
-    */
+}
 
-    // what the fuck.... :(
-    if (face_1 == 0 && face_2 == 1) {
-        return 0;
-    } else if (face_1 == 0 && face_2 == 2) {
-        return 1;
-    } else if (face_1 == 0 && face_2 == 3) {
-        return 2;
-    } else if (face_1 == 0 && face_2 == 4) {
-        return 3;
-    } else if (face_1 == 0 && face_2 == 5) {
-        return 4;
-    } else if (face_1 == 1 && face_2 == 2) {
-        return 5;
-    } else if (face_1 == 1 && face_2 == 3) {
-        return 6;
-    } else if (face_1 == 1 && face_2 == 4) {
-        return 7;
-    } else if (face_1 == 1 && face_2 == 5) {
-        return 8;
-    } else if (face_1 == 2 && face_2 == 3) {
-        return 9;
-    } else if (face_1 == 2 && face_2 == 4) {
-        return 10;
-    } else if (face_1 == 2 && face_2 == 5) {
-        return 11;
-    } else if (face_1 == 3 && face_2 == 4) {
-        return 12;
-    } else if (face_1 == 3 && face_2 == 5) {
-        return 13;
-    } else if (face_1 == 4 && face_2 == 5) {
-        return 14;
-    }
-
-    printf("invalid pair! (%i, %i)", face_1, face_2);
-
-    return -1;
+void just_check_one_pls(
+    half3 inv_dir,
+    half3 ray_dir,
+    int8_t3 dir_sign,
+    float3 ray_pos,
+    int16_t3 block_pos,
+    float base_distance,
+    out float tmin,
+    out float tmax,
+    out uint8_t entrance_face_axis,
+    out uint8_t exit_face_axis, 
+) {
+    float3 modified_ray_pos = (ray_pos + ray_dir * base_distance);
+    uint16_t3 floored_pos = (int3)floor(modified_ray_pos);
+    float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    
+    bool3 eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+    entrance_face_axis = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+    side_dist += select(eqs, inv_dir, 0.0);
+    tmin = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) + base_distance;
+    
+    eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+    exit_face_axis = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+    side_dist += select(eqs, inv_dir, 0.0);    
+    tmax = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) + base_distance;
 }
 
 uint get_precomputed_index(float3 ray_pos, half3 ray_dir, half3 inv_dir, int8_t3 dir_sign, float base_distance) {
@@ -242,7 +225,9 @@ uint get_precomputed_index(float3 ray_pos, half3 ray_dir, half3 inv_dir, int8_t3
     return face_pair_index << 16 | face_1_segment_index << 8 | face_2_segment_index;
 }
 
-static const bool FUNKY = true; 
+static const uint8_t SUBDIVISIONS = 16; 
+static const int BITS_PER_FACE_SEGMENT = 8; 
+static const bool FUNKY = false; 
 
 bool dda_bitset<let tracing: bool>(
     uint64_t raw,
@@ -270,14 +255,24 @@ bool dda_bitset<let tracing: bool>(
         uint8_t entrance_face = 0;
         uint8_t exit_face = 0;
         ray_box_intersection_2(inv_dir, dir_sign, ray_pos, block_pos, block_pos + 1, tmin, tmax, entrance_face, exit_face);
+        //just_check_one_pls(inv_dir, ray_dir, dir_sign, ray_pos, block_pos, base_distance, tmin, tmax, entrance_face, exit_face);
 
         uint8_t global_entrance_face = global_face_2(entrance_face, dir_sign);
-        uint8_t global_exit_face = global_face_2(exit_face, -dir_sign);
-
         uint8_t fst = global_entrance_face;
-        uint8_t snd = global_exit_face;
         float fst_dst = tmin + 0.001;
+        float3 fst_world = (ray_pos + ray_dir * fst_dst) - block_pos;
+        float2 fst_uvs = get_face_uvs(fst, fst_world);
+        uint8_t2 fst_seg = (uint8_t2)clamp((uint8_t2)floor(fst_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
+        uint8_t fst_index = fst_seg.x + fst_seg.y * SUBDIVISIONS;
+
+        uint8_t global_exit_face = global_face_2(exit_face, -dir_sign);
+        uint8_t snd = global_exit_face;
         float snd_dst = tmax - 0.001;
+        float3 snd_world = (ray_pos + ray_dir * snd_dst) - block_pos;
+        float2 snd_uvs = get_face_uvs(snd, snd_world);
+        uint8_t2 snd_seg = (uint8_t2)clamp((uint8_t2)floor(snd_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
+        uint8_t snd_index = snd_seg.x + snd_seg.y * SUBDIVISIONS;
+
 
         // swap them around to uphold the fst < snd
         if (fst > snd) {
@@ -285,26 +280,18 @@ bool dda_bitset<let tracing: bool>(
             snd = fst;
             fst = tmp;
 
-            float tmp2 = snd_dst;
-            snd_dst = fst_dst;
-            fst_dst = tmp2;
+            uint8_t tmp2 = snd_index;
+            snd_index = fst_index;
+            fst_index = tmp2;
         }
 
-        static const uint8_t SUBDIVISIONS = 16; 
-        static const int BITS_PER_FACE_SEGMENT = 8; 
 
-        // TODO: something wrong here! I don't know what!
+
         uint face_pair_index = face_pair_index(fst, snd);
 
-        float3 fst_world = (ray_pos + ray_dir * fst_dst) % 1;
-        float2 fst_uvs = get_face_uvs(fst, fst_world);
-        uint8_t2 fst_seg = (uint8_t2)clamp((uint8_t2)floor(fst_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
-        uint8_t fst_index = fst_seg.x + fst_seg.y * SUBDIVISIONS;
 
-        float3 snd_world = (ray_pos + ray_dir * snd_dst) % 1;
-        float2 snd_uvs = get_face_uvs(snd, snd_world);
-        uint8_t2 snd_seg = (uint8_t2)clamp((uint8_t2)floor(snd_uvs * SUBDIVISIONS), 0, SUBDIVISIONS);
-        uint8_t snd_index = snd_seg.x + snd_seg.y * SUBDIVISIONS;
+
+        
         
         uint index = face_pair_index << (BITS_PER_FACE_SEGMENT + BITS_PER_FACE_SEGMENT) | (uint)fst_index << BITS_PER_FACE_SEGMENT | snd_index;
 
@@ -477,7 +464,7 @@ bool dda_traverse<let hasFace : bool, let hasWorld : bool, let hasBlockPos: bool
     bool hit = dda_multi_level<STARTING_LEVEL, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, lid_index, (uint16_t3(SIZE) << 8), inv_dir, dir_sign, 0, distance, dda_precomputed, stats);
     
     if (hit) {
-        dda_bitset_final(fetcher, ray_dir, ray_pos, distance - 0.01, inv_dir, dir_sign, output);
+        //dda_bitset_final(fetcher, ray_dir, ray_pos, distance - 0.01, inv_dir, dir_sign, output);
     }
 
     return hit;

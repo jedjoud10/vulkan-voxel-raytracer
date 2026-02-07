@@ -17,15 +17,31 @@
     - Currently only supports shadow / soft shadows. Tried experimenting with naive-GI but did not work very nicely (also was very expensive)
 - Ticking logic system, separate from frame-based logic. Allows us to run the ``update`` compute shader periodically instead of every frame.
 
-## TODO
-- Implement multiple chunk rendering
-    - *Tip For Shadows*: At far enough distances, the per-voxel face texels will occupy less than one pixel on the screen. This means that it would be cheaper to do shadows for *each pixel*, instead of for *each voxel face texel*. 
+
+## Things I Tried
 - Implement *octree* / *BHV* as a basic acceleration structure.
-    - I have tried before to implement *octrees* with DDA and have failed. Maybe this time it will work
     - Got it working through multiple implementations:
         - Naive Octree Traversal: Just checks each node's 8 children using an AABB test...
         - DDA Recursive (stackless): Uses DDA to speed things up and recurses by calling the function itself. **Fastest one so far**
         - DDA Recursive (stack): Uses DDA to speed things up and stores results in an intermediate stack to be handled next iteration.
+- Micro-Voxels: Implemented by storing a ```u64``` inside the voxel texture, which allows us to run a DDA on for sub-meter voxels.
+- DDA "pre-computation" buffer: precomputes all the possible ```u64``` bitmasks on the CPU and uploads them to the GPU so that instead of doing "micro-DDA" we can just do a bitwise ```AND``` and check if there is an intersection between the ray and the micro-voxels. Works, but is *not* faster than just naive DDA. This is due to many reasons:
+    - This is how it works:
+        - It assumues the camera ray is coming from outside the block *towards* it
+        - It bakes the micro-voxels that are "traversed" between the start point and end point of the ray-intersection test.
+        - It does this by subdividing each face of the unit cube into 16*16 "pixels"
+        - During baking, it loops over every face, checking what are all the possible intersections that could occur to every *other* face
+        - It does this for 2 faces at a time, for each of their segments (so 4 nested loops for the segments and an extra loop for face pairs)
+        - It keeps track of the "traversed" micro-voxels by tagging them in a ```u64```
+        - At runtime, we look up the correct baked bitmask and ```AND``` the current fetched bitmask to check if there is a "possible" intersection (the baked intersections are *not* conservative) 
+
+    - Bad latency hiding: we are currently bandwidth limited because do so many texture / buffer fetches and not many ALU operations. We can't hide latency that well
+    - Bad occupancy: due to recursive octree traversal, occupancy is in shambles (4/16 on my 780m).
+    - Computing the unique index for the buffer is very expensive: I don't know how to improve this. I need a better encoding scheme than just ``` ray enter face + ray exit face + enter face segment + exit face segment ```
+
+## TODO
+- Implement multiple chunk rendering
+    - *Tip For Shadows*: At far enough distances, the per-voxel face texels will occupy less than one pixel on the screen. This means that it would be cheaper to do shadows for *each pixel*, instead of for *each voxel face texel*. 
 - Experiment with dedicated Raytracing extensions. Maybe we could speed things up by using RT acceleration structures / queries?
 - Implement a way to invoke multiple rays from the same ray. Will be implemented like this:
     1. Start with 1 ray, starting at the camera, at the specificed direction from screen-space UVs

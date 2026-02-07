@@ -116,10 +116,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     float3 col = 0;
     switch (debug_type) {
         case DebugType.Combined:
-            //col = stats.recursions / 64.0;    
+            col = stats.recursions / 64.0;    
             //col = ((ray_pos + ray_dir * stats.data - 0.01) % 1.0);    
             //col = stats.pause_resumes / 8.0;
-            col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
+            //col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
             break;
         case DebugType.FullHalt:
             col = abs(get_face_normal(thingy.face.get().value, sign(ray_dir)));
