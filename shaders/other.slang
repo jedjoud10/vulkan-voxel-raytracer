@@ -370,15 +370,18 @@ bool dda_bitset_simple(
     uint64_t raw,
     float3 ray_pos,
     float3 ray_dir,
-    out float distance,
+    float distance,
     int16_t3 block_pos,
     half3 inv_dir,
     int8_t3 dir_sign,
-    out uint3 brick_pos,
-    out uint8_t face,
+    out uint3 umokayumhello,
 ) {
     if (raw == 0) {
         return false;
+    }
+
+    if (raw == uint64_t.maxValue) {
+        return true;
     }
 
     float3 modified_ray_pos = (ray_pos + ray_dir * distance) * 4.0;
@@ -400,9 +403,7 @@ bool dda_bitset_simple(
         uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
         uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
         if (now_inside && bit_index >= 0 && bit_index < 64 && ((raw >> bit_index) & 1) == 1) {
-            brick_pos = floored_pos;
-
-            face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+            umokayumhello = floored_pos;
             return true;
         }
 
@@ -553,7 +554,6 @@ struct DdaTraversalOutput {
     bool hit;
     float3 world;
     uint3 block_pos;
-    uint8_t face;
 }
 
 DdaTraversalOutput dda_traverse_near_high_quality(   
@@ -563,9 +563,12 @@ DdaTraversalOutput dda_traverse_near_high_quality(
 ) {
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
+    float distance = 0.0;
     uint3 block_pos = 0;
 
-    return dda_near_high_quality<32>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, 0.0);
+
+    
+    return DdaTraversalOutput(false);
 }
 
 DdaTraversalOutput dda_traverse_far_low_quality(   
@@ -576,34 +579,36 @@ DdaTraversalOutput dda_traverse_far_low_quality(
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     float distance = 0.0;
+    uint3 block_pos = 0;
+
+    if (dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+        return DdaTraversalOutput(true, ray_pos + ray_dir * distance, block_pos);
+    }
+    
+    if (dda_far_low_quality<1, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+        return DdaTraversalOutput(true, ray_pos + ray_dir * distance, block_pos);
+    }    
+
 
     /*
-    if (dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+    if (!dda_far_low_quality<3, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+        return DdaTraversalOutput(false);
+    }   
+
+    if (!dda_far_low_quality<2, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+        return DdaTraversalOutput(false);
+    }
+    
+    if (!dda_far_low_quality<1, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
+        return DdaTraversalOutput(false);
+    }
+
+    if (dda_far_low_quality<0, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
         return DdaTraversalOutput(true, ray_pos + ray_dir * distance, block_pos);
     }
     */
     
-    /*
-    if (dda_far_low_quality<1, 256>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
-        return DdaTraversalOutput(true, ray_pos + ray_dir * distance, block_pos);
-    }    
-    */
-
-    if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
-        return DdaTraversalOutput(false);
-    }   
-
-    if (!dda_far_low_quality<2, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
-        return DdaTraversalOutput(false);
-    }
-        
-    /*
-    if (!dda_far_low_quality<1, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
-        return DdaTraversalOutput(false);
-    }
-    */
-
-    return dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
+    return DdaTraversalOutput(false);
 }
 
 bool dda_far_low_quality<let K : int16_t, let N : int>(
@@ -612,8 +617,10 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
     float3 ray_pos,
     half3 inv_dir,
     int8_t3 dir_sign,
-    inout float distance,
+    out float distance,
+    out uint3 umokayumhello,
 ) {
+    umokayumhello = 0;
     float3 modified_pos = (ray_pos + ray_dir * distance) / (1 << MAX(K, 0));
     uint16_t3 floored_pos = (uint16_t3)floor(modified_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
@@ -629,7 +636,8 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
 
         if (raw != 0) {
             float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * (1 << MAX(K, 0)));
-
+            
+            umokayumhello = floored_pos;
             distance += local_dist;
             return true;
             
@@ -663,35 +671,33 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
 }
 
 
-DdaTraversalOutput dda_near_high_quality<let N : int>(
+bool dda_near_high_quality<let N : int>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
     half3 inv_dir,
     int8_t3 dir_sign,
-    float distance,
+    out float distance,
+    out uint3 umokayumhello,
 ) {
-    float3 modified_pos = (ray_pos + ray_dir * distance);
-    uint16_t3 floored_pos = (uint16_t3)floor(modified_pos);
-    float3 side_dist = ((dir_sign * (floored_pos - modified_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    uint16_t3 floored_pos = (uint16_t3)floor(ray_pos);
+    float3 side_dist = ((dir_sign * (floored_pos - ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     bool3 eqs = false;
 
     [loop]
     for (int i = 0; i < N; i++) {
         if (any(floored_pos < 0 | floored_pos >= (SIZE))) {
-            return DdaTraversalOutput(false);
+            return false;
         }
 
         uint64_t raw = fetcher.fetch_raw((int3)(floored_pos), 0);
 
         if (raw != 0) {
-            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) - 0.1;
+            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir));
             
-            uint3 brick_pos = 0;
-            uint8_t face = 0;
-            if (dda_bitset_simple(raw, ray_pos, ray_dir, local_dist, floored_pos, inv_dir, dir_sign, brick_pos, face)) {
+            if (dda_bitset_simple(raw, ray_pos, ray_dir, local_dist, floored_pos, inv_dir, dir_sign, umokayumhello)) {
                 distance = local_dist;
-                return DdaTraversalOutput(true, ray_pos + ray_dir * distance, brick_pos, face);
+                return true;
             }
 
         }
@@ -702,7 +708,7 @@ DdaTraversalOutput dda_near_high_quality<let N : int>(
     }
 
 
-    return DdaTraversalOutput(false);
+    return false;
 }
 
 
@@ -760,10 +766,6 @@ public static const int3[] FACE_NORMALS = {
 
 float3 get_face_normal(int face, float3 sign) {
     return -(float3)(face == int3(0, 1, 2)) * sign;
-}
-
-int8_t3 get_face_normal(int face, int8_t3 sign) {
-    return (int8_t3)copysign(-(int8_t3)(face == int3(0, 1, 2)), sign);
 }
 
 int global_face(int face, float3 sign) {

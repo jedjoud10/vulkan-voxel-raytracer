@@ -125,7 +125,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             //col = float3(stats.total_iterations / 256.0, stats.recursions / 32.0, stats.bottom_level_iterations / 64.0);
             break;
         case DebugType.FullHalt:
-            col = abs(get_face_normal(hit2.face, sign(ray_dir)));
+            //col = abs(get_face_normal(hit2.face, sign(ray_dir)));
             //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
             break;
