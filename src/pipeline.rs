@@ -108,8 +108,13 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
-    let render_descriptor_set_layout_binding_precomputed_dda_buffer = vk::DescriptorSetLayoutBinding::default()
+    let render_descriptor_set_layout_binding_svo_bitmask_buffer = vk::DescriptorSetLayoutBinding::default()
         .binding(4)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
+    let render_descriptor_set_layout_binding_svo_index_buffer = vk::DescriptorSetLayoutBinding::default()
+        .binding(5)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
@@ -118,7 +123,8 @@ pub unsafe fn create_render_compute_pipeline(
         render_descriptor_set_layout_binding_voxel_image,
         render_descriptor_set_layout_binding_voxel_surface_buffer,
         render_descriptor_set_layout_binding_voxel_surface_index_image,
-        render_descriptor_set_layout_binding_precomputed_dda_buffer
+        render_descriptor_set_layout_binding_svo_bitmask_buffer,
+        render_descriptor_set_layout_binding_svo_index_buffer
     ];
 
     let render_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()

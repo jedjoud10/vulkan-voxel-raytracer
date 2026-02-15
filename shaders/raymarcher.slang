@@ -15,7 +15,10 @@ StructuredBuffer<SurfaceData> surface_data_buffer;
 Texture3D<uint> voxels_indices;
 
 [[vk::binding(4, 0)]]
-StructuredBuffer<uint64_t> dda_precomputed;
+StructuredBuffer<uint64_t> svo_bitmasks_buffer;
+
+[[vk::binding(5, 0)]]
+StructuredBuffer<uint16_t> svo_indices_buffer;
 
 [SpecializationConstant] const bool USE_PIXELATED_SHADOWS = false;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
@@ -32,6 +35,188 @@ enum DebugType: uint {
 
 groupshared uint min_clock;
 groupshared uint max_clock;
+
+
+bool dda_multi_level<let K : int>(
+    uint16_t base_index,
+    uint64_t raw,
+    float3 ray_dir,
+    float3 ray_pos,
+    half3 inv_dir,
+    int8_t3 dir_sign,
+    float distance,
+) {
+    int voxel_size = 1 << max(K, 0);
+    float3 modified_ray_pos = (ray_pos + ray_dir * (distance - 0.01)) / voxel_size;
+
+    /*
+    uint3 sub_cell_start_pos = (uint3)floor((ray_pos + ray_dir * ((float)popped.distance + 1.5)) / voxel_size);
+    uint3 sub_cell_end_pos = sub_cell_start_pos + 1;
+    */
+
+    float3 floored_pos = floor(modified_ray_pos);
+    float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
+
+    int face_local = 0;
+    for (int i = 0; i < DDA_STEPS; i++) {
+        // skip if we are outside the bounds of the map
+        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
+            break;
+        }
+
+        uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
+        uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
+        
+        /*
+        // handle partially full nodes / leaf voxel nodes
+        if (raw != 0) {
+            float3 test = (floored_pos * voxel_size - ray_pos + voxel_size * 0.5 - 0.5 * voxel_size * dir_sign) * inv_dir;
+            float dist = max3(test.x, test.y, test.z);
+
+            // completely full nodes are well, completely full. we can do the leaf-level logic since we know we can skip them
+            if ((raw & 4) == 4) {
+                stats.full_halts++;
+            
+                // set output parameters
+                float3 w = ray_pos + ray_dir * dist;
+                output.world = w;
+                output.face = face_local;
+                output.block_pos = (uint3)floor(w + ray_dir * 0.02);
+                
+                return true;
+            }
+
+
+            if (K > 0) {
+                stats.recursions++;
+
+                int3 next_min_bounds_world_space = (int3)floored_pos * voxel_size;
+                int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
+
+
+                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, next_min_bounds_world_space, next_max_bounds_world_space, inv_dir, dir_sign, max(dist, 0), stats, output)) {
+                    return true;
+                }
+            } else {
+                // set output parameters
+                output.world = ray_pos + ray_dir * dist;
+                output.face = face_local;
+                output.block_pos = (uint3)floored_pos;
+                
+                return true;
+            }
+        }
+
+
+
+        stats.total_iterations++;
+        */
+
+        float3 reconst = side_dist * inv_dir;
+        bool3 t = min3(reconst.x, reconst.y, reconst.z) == reconst;
+        int3 eqs = select(t, 1, 0);
+        face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+        floored_pos += select(t, dir_sign, 0);
+        side_dist += select(t, dir_sign, 0);
+    }
+    
+
+    return false;
+}
+
+#define MAX(a, b)  (((a) > (b)) ? (a) : (b)) 
+
+bool test2<let K : int>(
+    uint16_t base_index,
+    uint64_t raw,
+    float3 ray_dir,
+    float3 ray_pos,
+    half3 inv_dir,
+    int8_t3 dir_sign,
+    float distance,
+    int3 bounds_min,
+    int3 bounds_max,
+    out float3 col,
+) {
+    if (raw == 0) {
+        return false;
+    }
+
+    int voxel_size = 1 << max(K*2, 0);
+    int3 min_bounds_local_space = bounds_min / voxel_size;
+    int3 max_bounds_local_space = bounds_max / voxel_size;
+
+    float3 modified_ray_pos = (ray_pos + ray_dir * (distance + 0.01)) / voxel_size;
+    uint16_t3 floored_pos = (int3)floor(modified_ray_pos);
+    float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    bool3 eqs = 0;
+
+    col.x += 0.1;
+
+    [loop]
+    for (uint8_t i = 0; i < 12; i++) {
+        col.y += 0.01;
+        if (any(floored_pos < 0 | floored_pos >= (SIZE / voxel_size))) {
+            return false;
+        }
+
+        bool oob = any((int3)(floored_pos) < (min_bounds_local_space) | (int3)(floored_pos) > (max_bounds_local_space - 1));
+        bool oob_loose = any((int3)(floored_pos) < (min_bounds_local_space-1) | (int3)(floored_pos) > (max_bounds_local_space));
+        
+        
+        if (oob_loose) {
+            return false;
+        }
+        
+        uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
+        uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
+
+        if (bit_index < 64 && ((raw >> bit_index) & 1) == 1 && !oob) {            
+            if (K > 0) {
+                uint16_t new_base_index = svo_indices_buffer[base_index + bit_index];
+                
+                if (new_base_index != 0xFFFF) {
+                    uint64_t new_raw = svo_bitmasks_buffer[base_index + bit_index];
+
+                    int3 next_min_bounds_world_space = (int3)floored_pos * voxel_size;
+                    int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
+
+                    if (new_raw == -1 && new_base_index == 0xFFFF) {
+                        //col = 1.0;
+                        return true;
+                    }
+
+                    float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) + 0.01;
+
+                    if (test2<K - 1>(new_base_index, raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, next_min_bounds_world_space, next_max_bounds_world_space, col)) {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
+            } else {
+                //col = 1.0;
+                //col = (float)i / 16.0;
+                return true;
+            }
+        }
+
+
+        eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+        side_dist += select(eqs, inv_dir, 0.0);
+        floored_pos += select(eqs, (int16_t3)dir_sign, int16_t3(0));
+    }
+
+    return false;
+}
+
+float3 test(float3 ray_dir, float3 ray_pos) {
+    half3 inv_dir = (half3)1.0 / abs(ray_dir);
+    int8_t3 dir_sign = (int8_t3)sign(ray_dir);
+    float3 col = 0.0;
+    bool hit = test2<4>(0, svo_bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 9999999, col);
+    return col;
+}
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
@@ -52,54 +237,15 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
     
-    //output[id.xy] = float4(sky(sun_dir.xyz, ray_dir, true), 0);
-    //return;
     float3 inv_dir = 1 / ray_dir;
     float3 dir_sign = sign(ray_dir);
     
-    Fetcher fetcher = Fetcher(voxels);
-    //output[id.xy] = float4(dda_shadownate(fetcher, ray_dir, ray_pos), 0);
-    //return;
-
-
-    /*
-    float3 col = 0.0;
-    int hit2 = 
-
-    //output[id.xy] = float4(hit2 ? (tmp % 1) : 0.0, 0.0);
-    //output[id.xy] = float4(iterations / 8.0);
-    //output[id.xy] = float4((float)hit2 / 512.0);
-    output[id.xy] = float4(col, 0) ;
-    return;
-
-    //ray_pos += ray_dir * hash12((float2)(id.xy / 4) * float2(231.2312, 32.32423));
-
-    float3 floored_pos = floor(ray_pos);
-    float3 inv_dir = 1 / ray_dir;
-    float3 dir_sign = sign(ray_dir);
-    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
-    */
-
-
-    float3 color = 0.0;
-    bool hit = false;
-    float3 tint = 1.0;
-    
-    MultiLevelThingyOutput<true, true, true> thingy;
-    thingy.block_pos.set(0);
-    thingy.face.set(0);
-    thingy.world.set(0.0);
-    Conditional<TraceStats, true> _stats;
-    //hit = dda<256>(fetcher, ray_dir, ray_pos, thingy, stats);
     //hit = dda_traverse2<true, true, true>(fetcher, ray_dir, lid, ray_pos, stats);
     uint per_clock = 0;
     
     if (debug_type == DebugType.Timer) {
         per_clock = getRealtimeClock().x;
     }
-    
-    DdaTraversalOutput hit2 = dda_traverse_far_low_quality(fetcher, ray_dir, ray_pos);
-    hit = hit2.hit;
     
     /*
     //output[id.xy] = float4(stats.full_halts / 8.0);
@@ -112,14 +258,12 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     output[id.xy] = float4(diff / 64.0);
     */
     
-    //
-    TraceStats stats = _stats.get().value;
-    float3 col = 0;
+    float3 col = test(ray_dir, ray_pos);
     //col = (float3)hit2.block_pos % 4 / 4.0;
     //col = ((float3)thingy.block_pos.get().value % 4) / 4.0;
     switch (debug_type) {
         case DebugType.Combined:
-            col = ((float3)hit2.block_pos % 4) / 4.0;
+            //col = ((float3)hit2.block_pos % 4) / 4.0;
             //col = stats.recursions / 64.0;    
             //col = ((ray_pos + ray_dir * stats.data - 0.01) % 1.0);    
             //col = stats.pause_resumes / 8.0;
@@ -129,14 +273,16 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
             //col = abs(get_face_normal(hit2.face, sign(ray_dir)));
             //col = thingy.block_pos.get().value % 10 / 10.0;
             //col = stats.full_halts / 8.0;
-            col = hit ? 1 : 0;
+            //col = hit ? 1 : 0;
             break;
         case DebugType.Iterations:
+            /*
             if (stats.total_iterations < 256.0) {
                 col = stats.total_iterations / 256.0;
             } else {
                 col = float3(1, 0, 1);
             }
+            */
             break;
         case DebugType.Recursions:
             //col = distance(ray_pos, thingy.world.get().value) / 10.0;
@@ -163,233 +309,5 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     }
     
     output[id.xy] = float4(col, 0);
-    //return;
-    //return;
-    //output[id.xy] = float4(hit ? 1 : 0);
-    //output[id.xy] = float4(world % 10 / 10.0, 0);
-
-    int face = 0;
-    float3 world = 0;
-    float3 normal = 0;
-    uint3 block_pos = 0;
-    float3 block_uvs = 0;
-
-    face = hit2.face;
-    world = hit2.world;
-    normal = get_face_normal(face, dir_sign);
-    block_pos = hit2.block_pos;
-    //block_uvs = world - block_pos;
-
-    //output[id.xy] = float4(normal, 0);
-    //return;
-
-    /*
-    face = (int)thingy.face.get().value;
-    world = thingy.world.get().value;
-    normal = get_face_normal(face, dir_sign);
-    block_pos = (uint3)thingy.block_pos.get().value;
-    block_uvs = world - block_pos;
-    */
-    bool lastWasAir = true;
-
-    /*
-    for (int i = 0; i < SIZE*2; i++) {
-        Voxel voxel = fetcher.fetch((int3)floored_pos);
-
-        if (voxel.active) {
-            if (i == 0) {
-                hit = true;
-                color = 0.0;
-                break;
-            }
-
-            float3 test = (floored_pos - ray_pos + 0.5 - 0.5 * dir_sign) * inv_dir;
-            float max = max3(test.x, test.y, test.z);
-            world = ray_pos + ray_dir * max;
-            block_uvs = world - floored_pos;
-
-            if (USE_ROUND_NORMALS) {
-                normal = normalize(block_uvs * 2 - 1);
-            } else {
-                normal = get_face_normal(face, dir_sign);
-            }
-            block_pos = (uint3)floored_pos;
-
-            if ((voxel.refractive || voxel.reflective)) {
-                if (lastWasAir) {
-                    //normal += float3(sin(world.x * 10 + 0.2565), cos(world.y * 10 + 0.89684), sin(world.z * 10 - 0.211256)) * 0.12;
-                    
-                    if (USE_NOISY_REFRACTIONS_REFLECTIONS) {
-                        normal += (hash33(block_uvs * float3(23.231, -435.4354, 9412.1)) - 0.5) * 0.05;
-                    }
-
-                    normal = normalize(normal);
-
-                    if (voxel.refractive) {
-                        //ray_dir = normalize(ray_dir - normal);
-                        //ray_dir = ray_dir;
-                        ray_dir = refract(ray_dir, normal, 0.7);
-                    } else {
-                        ray_dir = reflect(ray_dir, normal);
-                    }
-
-                    inv_dir = 1 / ray_dir;
-                    dir_sign = sign(ray_dir);
-                    side_dist = (floored_pos - world + 0.5 + 0.5 * dir_sign);
-                    ray_pos = world;
-                }
-                
-                tint *= per_block_unique_colour(block_pos);
-            } else {
-                hit = true;
-                break;
-            }
-
-            lastWasAir = false;
-        } else {
-            lastWasAir = true;
-        }
-
-        float3 reconst = side_dist * inv_dir;
-        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
-        face = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-        floored_pos += dir_sign * eqs;
-        side_dist += dir_sign * eqs;
-    }
-    */
-
-    //int iterations;
-    //hit = traverse(fetcher, ray_dir, ray_pos, world, block_pos, block_uvs, face, iterations);
-    //normal = get_face_normal(face, dir_sign);
-
-    // either compute sky color or PBR color
-    if (hit) {
-        uint funny_index_magic = voxels_indices[block_pos];
-
-        float3 shadow = 0.0;
-
-        if (USE_PIXELATED_SHADOWS) {
-            // if face = 0, enabled faces = 100111, target face is the 1st bit from the right, packed index = 0
-            // 100111
-            // (100111 << 6) & 0b111111
-            // 0
-            // count(0) = 0
-
-            // if face = 1, enabled faces = 100111, target face is the 2nd bit from the right, packed index = 1
-            // 100111
-            // (100111 << 5) & 0b111111
-            // count(100) = 1
-
-            // if face = 4, enabled faces = 110011, target face is the 5th bit from the right, packed index = 2
-
-            // first bit (from the left) is the corresponding face, but we count bits from the left
-            // count number of valid bits until we reach (6-face) (counting from right)
-
-            // we always only look at one face...
-            // we can optimize the surface data fetch by knowing this
-
-            // adds 2 padding bits to the right at the start
-            // IT WORKS!!!
-            uint funny_index = funny_index_magic & ~(0b111111 << (32 - 6));
-            if (funny_index != INVALID) {
-                uint enabled_faces = (funny_index_magic >> (32 - 6)) & 0b111111;
-                uint face2 = global_face(face, dir_sign);
-
-                enabled_faces = (enabled_faces << (6 - face2)) & 0b111111;
-                int packed_face_index = countbits(enabled_faces);
-
-                SurfaceData surface_data = surface_data_buffer[funny_index + packed_face_index];
-
-                float2 flat = flatten_uvs(face, dir_sign, block_uvs);
-                uint2 pixels = (uint2)(floor(flat * 4 - 0.002));
-                uint converted_to_flat_index = pixels.x + pixels.y * 4;
-                shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
-            }
-        } else {
-            /*
-            for (int k = 0; k < 4; k++) {
-                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                float3 dir = normalize(sun.xyz + rng * 0.05);
-                float d = 0;
-                bool t = dda<64>(fetcher, dir, world + dir * 0.05, d);
-                shadow += (t ? 0.0 : 1);
-            }
-
-            shadow = shadow / 4.0;
-            */
-
-            shadow = 1.0;
-            //shadow = dda<64>(fetcher, sun.xyz, world + sun.xyz * 0.05) ? 0.0 : 1.0;
-            //shadow = dda_shadownate(fetcher, sun.xyz, world + sun.xyz * 0.01);
-        }
-        
-        ao_solver solver;
-        solver.fetcher = fetcher;
-        solver.pos = block_pos;
-        solver.uv = floor(block_uvs * 8) / 7;
-        solver.face = face;
-        solver.sign = dir_sign;
-        float ao = solver.ao();
-        ao = ao * 0.4f + 0.6;
-
-        uint3 pixels = (uint3)(floor(block_uvs * 8 + 0.001));
-
-        if (hash13(block_pos) > 0.5) {
-            pixels.x = 7 - pixels.x;
-        }
-    
-        if (hash13(block_pos + 12.12321) > 0.5) {
-            pixels.z = 7 - pixels.z;
-        }
-    
-        //color = normal;
-        normal = normalize(normal + (hash33(pixels * float3(4.5984, 43.2323, -0.1212)) - 0.5) * 0.05);
-        float mixer = hash13(pixels * float3(123.321, 21.322, -32.321)) * 0.2 + 0.8;
-    
-        //float3 grass = 1;
-        //float3 dirt = 0.2;
-        float3 grass = float3(33, 60, 30) / 255;
-        float3 dirt = float3(58, 33, 22) / 255;
-
-        float3 sky_reflected_dir = reflect(ray_dir, normal);
-        bool top_face = normal.y > 0.5;
-        bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
-        float3 diffuse = (top_face ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
-
-        float sky_visibility = 0.0;
-        sky_visibility = 1.0;
-
-        /*
-        for (int k = 0; k < 16; k++) {
-            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-            //rng[face % 3] = 0.0;
-            float3 dir = normalize(normal + rng * 1.5);
-            float d = 0;
-            bool t = dda<12>(fetcher, dir, world + dir * 0.1, d);
-            sky_visibility += (t ? (1 - dot(dir, normal)) : 1);
-        }
-
-        sky_visibility /= 16.0;
-        */
-        
-        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
-        CameraData camera_data = CameraData(-ray_dir);
-        SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 0.8 : 0);
-        //color = normal;
-        color = brdf(pbr_surface_data, camera_data, sun_data);
-        //color = block_pos;
-    } else {
-        color = sky(sun.xyz, ray_dir);
-    }
-
-    color *= tint;
-
-    //color = pow(color, 1 / 2.2);
-    color = clamp(pow(aces(color * 1.3), 1 / 2.2), 0, 1);
-    output[id.xy] = float4(color, 0);
-}
-
-[shader("compute")]
-[numthreads(16, 16, 1)]
-void lighting(uint3 id: SV_DispatchThreadID) {
+    return;
 }

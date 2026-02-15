@@ -1,9 +1,9 @@
-use std::{ffi::{CStr, CString}, str::FromStr};
+use std::{collections::VecDeque, ffi::{CStr, CString}, str::FromStr};
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 
-use crate::pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline};
+use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 
 pub const MIP_LEVELS: usize = 9;
 pub const SIZE: u32 = 1 << ((MIP_LEVELS-1) as u32);
@@ -81,6 +81,7 @@ pub struct VoxelImage {
     pub per_mip_views: [vk::ImageView; MIP_LEVELS as usize],
     pub image_view_whole: vk::ImageView,
 }
+
 impl VoxelImage {
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
         for x in self.per_mip_views {
@@ -91,6 +92,35 @@ impl VoxelImage {
         device.destroy_image(self.image, None);
         allocator.free(self.allocation).unwrap();
     }
+}
+
+pub struct SparseVoxelOctree {
+    pub bitmask_buffer: Buffer,
+    pub index_buffer: Buffer,
+}
+
+impl SparseVoxelOctree {
+    pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
+        self.bitmask_buffer.destroy(device, allocator);
+        self.index_buffer.destroy(device, allocator);
+    }
+}
+
+pub unsafe fn create_sparse_voxel_octree(
+    device: &ash::Device,
+    mut allocator: &mut Allocator,
+    binder: &Option<ash::ext::debug_utils::Device>,
+    name: &str,
+) -> SparseVoxelOctree {
+    // TODO: does this make sense? no... but... it works...
+    let max_svo_element_size = 4096 * 64 * 64;
+
+    let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks");
+    
+    
+    let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u16>(), &binder, "sparse voxel octree child indices");
+
+    SparseVoxelOctree { bitmask_buffer, index_buffer }
 }
 
 pub unsafe fn create_voxel_octree_mip_map_image(
@@ -405,6 +435,254 @@ pub unsafe fn generate_voxel_image(
     device.destroy_fence(fence, None);
 }
 
+
+struct Node {
+    children: [Option<Box<Node>>; 64],
+    bottom: bool,
+}
+
+fn create_sphere_svo(depth: u32, max_depth: u32, center: [f32; 3], radius: f32) -> Node {
+    if depth > max_depth {
+        return Node {
+            children: [const { None }; 64],
+            bottom: true,
+        };
+    }
+
+    let mut children = [const { None }; 64];
+    let cell_size = 2.0 / (1u32 << depth) as f32;
+
+    for i in 0..64 {
+        let x = (i % 4) as f32;
+        let y = ((i / 4) % 4) as f32;
+        let z = (i / 16) as f32;
+
+        let child_center = [
+            center[0] - 1.0 + (x + 0.5) * cell_size,
+            center[1] - 1.0 + (y + 0.5) * cell_size,
+            center[2] - 1.0 + (z + 0.5) * cell_size,
+        ];
+
+        let dist = ((child_center[0] - center[0]).powi(2)
+            + (child_center[1] - center[1]).powi(2)
+            + (child_center[2] - center[2]).powi(2))
+            .sqrt();
+
+        if dist <= radius {
+            children[i] = Some(Box::new(create_sphere_svo(
+                depth + 1,
+                max_depth,
+                child_center,
+                radius,
+            )));
+        }
+    }
+
+    Node {
+        children,
+        bottom: depth == max_depth,
+    }
+}
+
+fn create_torus_svo(depth: u32, max_depth: u32, center: [f32; 3], major_radius: f32, minor_radius: f32) -> Node {
+    if depth > max_depth {
+        return Node {
+            children: [const { None }; 64],
+            bottom: true,
+        };
+    }
+
+    let mut children = [const { None }; 64];
+    let cell_size = 4.0 / (1u32 << depth) as f32;
+
+    for i in 0..64 {
+        let x = (i % 4) as f32;
+        let y = ((i / 4) % 4) as f32;
+        let z = (i / 16) as f32;
+
+        let child_center = [
+            center[0] - 2.0 + (x + 0.5) * cell_size,
+            center[1] - 2.0 + (y + 0.5) * cell_size,
+            center[2] - 2.0 + (z + 0.5) * cell_size,
+        ];
+
+        let dist_xy = ((child_center[0] - center[0]).powi(2)
+            + (child_center[1] - center[1]).powi(2))
+            .sqrt();
+        let dist_torus = ((dist_xy - major_radius).powi(2) + (child_center[2] - center[2]).powi(2)).sqrt();
+
+        if dist_torus <= minor_radius {
+            children[i] = Some(Box::new(create_torus_svo(
+                depth + 1,
+                max_depth,
+                child_center,
+                major_radius,
+                minor_radius,
+            )));
+        }
+    }
+
+    Node {
+        children,
+        bottom: depth == max_depth,
+    }
+}
+
+fn create_menger_sponge_svo(depth: u32, max_depth: u32, center: [f32; 3], size: f32) -> Node {
+    if depth > max_depth {
+        return Node {
+            children: [const { None }; 64],
+            bottom: true,
+        };
+    }
+
+    let mut children = [const { None }; 64];
+    let cell_size = size / 4.0;
+
+    for i in 0..64 {
+        let x = (i % 4) as f32;
+        let y = ((i / 4) % 4) as f32;
+        let z = (i / 16) as f32;
+
+        let child_center = [
+            center[0] - size / 2.0 + (x + 0.5) * cell_size,
+            center[1] - size / 2.0 + (y + 0.5) * cell_size,
+            center[2] - size / 2.0 + (z + 0.5) * cell_size,
+        ];
+
+        // Menger sponge rule: exclude center cube of each face and the very center
+        let local_x = (x as u32) % 3;
+        let local_y = (y as u32) % 3;
+        let local_z = (z as u32) % 3;
+
+        let is_removed = (local_x == 1 && local_y == 1) || 
+                         (local_y == 1 && local_z == 1) || 
+                         (local_x == 1 && local_z == 1);
+
+        if !is_removed {
+            children[i] = Some(Box::new(create_menger_sponge_svo(
+                depth + 1,
+                max_depth,
+                child_center,
+                cell_size,
+            )));
+        }
+    }
+
+    Node {
+        children,
+        bottom: depth == max_depth,
+    }
+}
+
+fn pseudo_random(seed: u32) -> u32 {
+    let mut value = seed;
+    value ^= value << 13;
+    value ^= value >> 17;
+    value ^= value << 5;
+    value = value.wrapping_mul(0x322adf);
+    value ^= value >> 11;
+    value = value.wrapping_add(0x9e3779b9);
+    value
+}
+
+fn test_sparse_voxel_octree_recurse(base: u32) -> Node {
+    if base == 0 {
+        return Node {
+            children: [const { None }; 64],
+            bottom: true,
+        };
+    }
+
+    let mut children = [const { None }; 64];
+
+    for x in 0..64 {
+        if (x % 4) == 0 {
+            children[x] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1)));
+        }
+    }
+
+    for x in 0..8 {
+        let index = pseudo_random(x ^ 0x03f23) % 64;
+        children[index as usize] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1)));
+    }
+
+    Node {
+        children: children,
+        bottom: base < 1,
+    }
+}
+
+fn test_sparse_voxel_octree_root() -> Node {
+    //return create_sphere_svo(0, 3, [1.0f32, 1.0f32, 1.0f32], 5f32);
+    return test_sparse_voxel_octree_recurse(5);
+}
+
+fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u16>) {
+    let mut queue = VecDeque::<&Node>::new();
+    queue.push_back(&node);
+
+    let mut bitmask_vec = Vec::<u64>::new();
+    let mut index_vec = Vec::<u16>::new();
+    let mut nodes_visited = 0;
+
+    while let Some(popped) = queue.pop_front() {
+        let mut bitmask = popped.children.iter()
+            .enumerate()
+            .filter_map(|(i, x)| x.as_ref().map(|_| i))
+            .fold(0u64, |prev, i| ((1u64 << i) as u64) | prev);
+        
+        let mut index = bitmask_vec.len() as u16;
+
+        if (popped.bottom) {
+            bitmask = u64::MAX;
+            index = u16::MAX;
+        }
+
+        bitmask_vec.push(bitmask);
+        index_vec.push(index);
+
+        for child in popped.children.iter().filter_map(|x| x.as_ref()) {
+            queue.push_back(child)
+        }
+
+        nodes_visited += 1;
+    }
+
+    log::debug!("nodes visited: {nodes_visited}, length: {}", bitmask_vec.len());
+
+    (bitmask_vec, index_vec)
+}
+
+// each node contains a u64 bitmask that checks if any of its children are leaf nodes
+// another buffer stores the "children base" index references as u16s
+// it contains a bitmask of its children
+
+pub unsafe fn convert_mips_svo(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    queue: vk::Queue,
+    pool: vk::CommandPool,
+    descriptor_pool: vk::DescriptorPool,
+    queue_family_index: u32,
+    voxel_image: &VoxelImage,
+    svo: &SparseVoxelOctree,
+) {
+    let test = test_sparse_voxel_octree_root();
+    let (bitset_vec, index_vec) = convert_to_buffers(test);
+
+    let bitmask_data = bitset_vec.as_slice();
+    let bitmask_data_bytes: &[u8] = bytemuck::cast_slice(bitmask_data); 
+
+    buffer::write_to_buffer(device, pool, queue, svo.bitmask_buffer.buffer, allocator, bitmask_data_bytes);
+
+    // init: fill the index buffer with invalid indices (0xFFFF)
+    buffer::fill_buffer(&device, pool, queue, svo.index_buffer.buffer, u32::MAX);
+
+    let index_data = index_vec.as_slice();
+    let index_data_bytes: &[u8] = bytemuck::cast_slice(&index_data); 
+    buffer::write_to_buffer(device, pool, queue, svo.index_buffer.buffer, allocator, index_data_bytes);
+}
 
 pub unsafe fn execute_voxel_tick_compute(
     device: &ash::Device,

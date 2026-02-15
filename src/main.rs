@@ -17,7 +17,6 @@ mod swapchain;
 mod voxel;
 mod ticker;
 mod buffer;
-mod rays;
 
 use ash;
 use ash::vk;
@@ -42,8 +41,8 @@ use crate::pipeline::MultiComputePipeline;
 use crate::pipeline::VoxelGeneratePipeline;
 use crate::pipeline::VoxelTickPipeline;
 use crate::voxel::_SIZE;
+use crate::voxel::SparseVoxelOctree;
 use crate::voxel::VoxelImage;
-use crate::rays::*;
 
 struct InternalApp {
     input: Input,
@@ -77,14 +76,13 @@ struct InternalApp {
     generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
 
-    dda_precomputed: Buffer,
-
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
     voxel_image: VoxelImage,
     voxel_surface_index_image: (vk::Image, Allocation, vk::ImageView),
     voxel_surface_buffer: Buffer,
     voxel_surface_counter_buffer: Buffer,
+    svo: SparseVoxelOctree,
     visible_surface_buffer: Buffer,
     visible_surface_counter_buffer: Buffer,
     visible_surface_indirect_dispatch_buffer: Buffer,
@@ -244,6 +242,9 @@ impl InternalApp {
         let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R64_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
         log::info!("created voxel image");
 
+        let svo = voxel::create_sparse_voxel_octree(&device, &mut allocator, &debug_marker, "sparse voxel octree");
+        log::info!("created sparse voxel octree buffers");
+
         let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
         log::info!("created voxel surface indices image");
 
@@ -277,8 +278,16 @@ impl InternalApp {
             &generate_voxel_compute_pipeline,            
         );
 
-        let dda_precomputed = rays::create_dda_precomputed_buffer(&device, pool, queue, &mut allocator, &debug_marker);
-        log::info!("created precomputed 4x4x4 DDA buffer");
+        voxel::convert_mips_svo(
+            &device,
+            &mut allocator,
+            queue,
+            pool,
+            descriptor_pool,
+            queue_family_index,
+            &voxel_image,
+            &svo
+        );
 
         Self {
             input: Default::default(),
@@ -308,6 +317,7 @@ impl InternalApp {
             descriptor_pool,
             allocator,
             voxel_image,
+            svo,
             rt_images,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
             voxel_surface_buffer,
@@ -317,7 +327,6 @@ impl InternalApp {
             visible_surface_counter_buffer,
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
-            dda_precomputed,
             debug_type: 0,
         }
     }
@@ -536,17 +545,21 @@ impl InternalApp {
             .buffer(self.voxel_surface_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
-        let descriptor_precomputed_dda_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.dda_precomputed.buffer)
+        let descriptor_svo_bitmasks_buffer_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.svo.bitmask_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
-        
+        let descriptor_svo_indices_buffer_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.svo.index_buffer.buffer)
+            .offset(0)
+            .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
         let descriptor_voxel_image_infos = [descriptor_voxel_image_info];
         let descriptor_voxel_surface_index_image_infos = [descriptor_voxel_surface_index_image_info];
         let descriptor_voxel_buffer_infos = [descriptor_voxel_buffer_info];
-        let descriptor_precomputed_dda_buffer_infos = [descriptor_precomputed_dda_buffer_info];
+        let descriptor_svo_bitmasks_buffer_infos = [descriptor_svo_bitmasks_buffer_info];
+        let descriptor_svo_indices_buffer_infos = [descriptor_svo_indices_buffer_info];
 
         let descriptor_write_1 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
@@ -577,10 +590,17 @@ impl InternalApp {
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(4)
             .dst_set(descriptor_set)
-            .buffer_info(&descriptor_precomputed_dda_buffer_infos);
+            .buffer_info(&descriptor_svo_bitmasks_buffer_infos);
+        let descriptor_write_6 = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .dst_binding(5)
+            .dst_set(descriptor_set)
+            .buffer_info(&descriptor_svo_indices_buffer_infos);
+        
 
         self.device
-            .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4, descriptor_write_5], &[]);
+            .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4, descriptor_write_5, descriptor_write_6], &[]);
 
         self.device.cmd_bind_descriptor_sets(
             cmd,
@@ -782,8 +802,8 @@ impl InternalApp {
         self.visible_surface_indirect_dispatch_buffer.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed indirect dispatch buffer");
 
-        self.dda_precomputed.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed precomputed dda buffer");
+        self.svo.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed SVO buffer");
 
         // TODO: Just cope with the error messages vro
         self.device

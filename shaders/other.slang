@@ -175,7 +175,7 @@ DdaTraversalOutput dda_traverse_far_low_quality(
 
 
     
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 1; i++) {
         if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
             return DdaTraversalOutput(false);
         }    
@@ -227,7 +227,7 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
 
     [loop]
     for (int i = 0; i < N; i++) {
-        if (any(floored_pos < 0 | floored_pos >= (SIZE >> MAX(K, 0)))) {
+        if (any(floored_pos < 0 | floored_pos >= (SIZE / (1 << MAX(K, 0))))) {
             return false;
         }
 

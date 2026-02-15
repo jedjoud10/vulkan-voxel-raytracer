@@ -16,6 +16,7 @@ impl Buffer {
     }
 }
 
+
 pub unsafe fn create_buffer(
     device: &ash::Device,
     allocator: &mut Allocator,
@@ -23,6 +24,7 @@ pub unsafe fn create_buffer(
     binder: &Option<ash::ext::debug_utils::Device>,
     name: &str,
 ) -> Buffer {
+    log::debug!("creating buffer {name} ({}kb)", size / 1024);
     let buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
 
@@ -62,6 +64,35 @@ pub unsafe fn create_buffer(
     Buffer {
         buffer, allocation
     }
+}
+
+pub unsafe fn fill_buffer(
+    device: &ash::Device,
+    pool: vk::CommandPool,
+    queue: vk::Queue,
+    dst_buffer: vk::Buffer,
+    data: u32,
+) {
+    let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
+        .command_buffer_count(1)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_pool(pool);
+    let cmd = device
+        .allocate_command_buffers(&cmd_buffer_create_info)
+        .unwrap()[0];
+    device.begin_command_buffer(cmd, &Default::default()).unwrap();
+
+    device.cmd_fill_buffer(cmd, dst_buffer, 0, vk::WHOLE_SIZE, data);
+
+    device.end_command_buffer(cmd).unwrap();
+
+    let buffers = [cmd];
+    let submit = vk::SubmitInfo::default()
+        .command_buffers(&buffers);
+
+
+    device.queue_submit(queue, & [submit], vk::Fence::null()).unwrap();
+    device.device_wait_idle().unwrap();
 }
 
 pub unsafe fn write_to_buffer(
