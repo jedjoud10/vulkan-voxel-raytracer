@@ -18,7 +18,9 @@ pub struct Movement {
 impl Movement {
     pub fn new() -> Self {
         Self {
-            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 20f32, crate::voxel::SIZE as f32 / 2f32),
+            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32 - 30f32, 30f32, crate::voxel::SIZE as f32 / 2f32 - 30f32),
+            rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
+            //position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 60f32, crate::voxel::SIZE as f32 / 2f32),
             ..Default::default()
         }
     }
@@ -57,8 +59,8 @@ impl Movement {
             summed_mouse_target,
             (40f32 * delta).clamped01(),
         );
-        self.rotation = vek::Quaternion::rotation_y(self.summed_mouse.x)
-            * vek::Quaternion::rotation_x(self.summed_mouse.y);
+        self.rotation = vek::Quaternion::rotation_y(self.summed_mouse.x) * vek::Quaternion::rotation_x(self.summed_mouse.y);
+        
 
         let uhh = 1f32 / ratio;
         // TODO: fix the weird radian fov?

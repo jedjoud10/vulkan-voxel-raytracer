@@ -35,10 +35,14 @@ void main(uint3 id: SV_DispatchThreadID) {
                 base += extra;
 
                 //base += saturate(sin(snoise(p * 0.01) * 0.2)) * 90.5;
-                base += saturate(sin(snoise(p * float3(1, 4, 1) * 0.1)) * 5) * 4;
+                float detail = saturate(sin(snoise(p * float3(1, 4, 1) * 0.1)) * 5) * 2;
+                base += detail;
 
-                //float cave = sign(-snoise(p * 0.02) + 0.8) * 1000;
-                //base += cave;
+                float cave = sign(abs(snoise(p * 0.02)) - 0.2) * 10 - 2;
+                cave += snoise(p * 2.8 * float3(1, 2, 1)) * 5.0;
+                //cave += max(snoise(p.xz * 0.05123), 0) * 8.0;
+                //cave -= max(snoise(p.xz * 0.1312), 0) * 8.0 - p.y;
+                //base = cave;
 
                 raw |= (base < 0.0) ? ((uint64_t)1 << i) : 0; 
                 //voxel.type = cave < 0 ? Type.Grass : Type.Rock;

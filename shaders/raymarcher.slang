@@ -163,7 +163,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     }
     
     output[id.xy] = float4(col, 0);
-    return;
+    //return;
     //return;
     //output[id.xy] = float4(hit ? 1 : 0);
     //output[id.xy] = float4(world % 10 / 10.0, 0);
@@ -178,7 +178,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
     world = hit2.world;
     normal = get_face_normal(face, dir_sign);
     block_pos = hit2.block_pos;
-    block_uvs = world - block_pos;
+    //block_uvs = world - block_pos;
+
+    //output[id.xy] = float4(normal, 0);
+    //return;
 
     /*
     face = (int)thingy.face.get().value;
@@ -303,6 +306,18 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
                 shadow = float3(surface_data.colors[converted_to_flat_index].xyz / 255.0);
             }
         } else {
+            /*
+            for (int k = 0; k < 4; k++) {
+                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                float3 dir = normalize(sun.xyz + rng * 0.05);
+                float d = 0;
+                bool t = dda<64>(fetcher, dir, world + dir * 0.05, d);
+                shadow += (t ? 0.0 : 1);
+            }
+
+            shadow = shadow / 4.0;
+            */
+
             shadow = 1.0;
             //shadow = dda<64>(fetcher, sun.xyz, world + sun.xyz * 0.05) ? 0.0 : 1.0;
             //shadow = dda_shadownate(fetcher, sun.xyz, world + sun.xyz * 0.01);
@@ -341,19 +356,21 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform fl
         bool top_pixels = pixels.y > 6 && !fetcher.fetch(block_pos + uint3(0, 1, 0)).active;
         float3 diffuse = (top_face ? grass : dirt) * (hash13(block_pos + 12) * 0.2 + 0.8);
 
-        float sky_visibility = 1.0;
-        /*
         float sky_visibility = 0.0;
+        sky_visibility = 1.0;
 
-        for (int k = 0; k < 2; k++) {
+        /*
+        for (int k = 0; k < 16; k++) {
             float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-            float3 dir = normalize(sky_reflected_dir + rng * 0.4);
-            sky_visibility += dda<8>(fetcher, dir, world + dir * 0.1) ? 0 : 1;
+            //rng[face % 3] = 0.0;
+            float3 dir = normalize(normal + rng * 1.5);
+            float d = 0;
+            bool t = dda<12>(fetcher, dir, world + dir * 0.1, d);
+            sky_visibility += (t ? (1 - dot(dir, normal)) : 1);
         }
 
-        sky_visibility /= 2.0;
+        sky_visibility /= 16.0;
         */
-        
         
         PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
         CameraData camera_data = CameraData(-ray_dir);

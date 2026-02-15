@@ -107,14 +107,17 @@ public float3 brdf(
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
-	float3 ambient = irradiance * surface.diffuse * kd * surface.visibility;
+	float3 ambient = irradiance * surface.diffuse * kd * surface.visibility * surface.sky_visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
 	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
 
-	float3 specular_fresnel_ambient = getEnvironmentSpecular(reflect(camera.view, surface.normal), 0.2, skyColor, groundColor) * pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
+	float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), 0.1, skyColor, groundColor);
+	float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
 
 	//return specular_fresnel_ambient;
-	return brdf + ambient * 0.8 + specular_fresnel_ambient * 0.3;
+	//return surface.sky_visibility;
+	//return environment_specular * environment_specular_fresnel_strength;
+	return brdf * surface.sky_visibility + ambient * 0.8;
 	//return specular;
 	//return ambient * 0.5;
 }

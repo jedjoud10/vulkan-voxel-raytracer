@@ -11,6 +11,7 @@ static const int MIP_LEVELS = 9;
 static const int SIZE = 1 << (MIP_LEVELS-1);
 static const uint INVALID = 0x3FFFFFF;
 
+
 struct Fetcher {
     Texture3D<uint64_t> voxels;
 
@@ -27,6 +28,20 @@ struct Fetcher {
     static const uint8_t1 zero = (uint8_t)0;
     uint64_t fetch_raw(uint8_t3 position, uint8_t1 level = zero) {
         return voxels.Load(uint8_t4(position, level));
+    }
+
+    uint64_t fetch_raw_2(uint8_t3 position, uint8_t1 level = zero) {
+        var pos = uint8_t4(position, level);
+
+        if (WaveActiveAllEqual(pos)) {            
+            // only one thread should fetch            
+            return WaveReadLaneFirst(voxels.Load(pos));
+        } else {
+            //sorry poopy
+            return voxels.Load(pos);
+        }
+
+        return false;
     }
 }
 
@@ -73,6 +88,7 @@ bool dda_bitset_simple(
         return false;
     }
 
+    float tmp = distance;
     float3 modified_ray_pos = (ray_pos + ray_dir * distance) * 4.0;
     uint16_t3 floored_pos = (int3)floor(modified_ray_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
@@ -93,7 +109,7 @@ bool dda_bitset_simple(
         uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
         if (now_inside && bit_index >= 0 && bit_index < 64 && ((raw >> bit_index) & 1) == 1) {
             float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) / 4.0;
-            distance += local_dist - 0.01;
+            distance += local_dist - 0.1;
 
             brick_pos = floored_pos;
             face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
@@ -105,7 +121,7 @@ bool dda_bitset_simple(
         floored_pos += select(eqs, (int16_t3)dir_sign, int16_t3(0));
     }
 
-
+    distance = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) / 4.0; + tmp;
     return false;
 }
 
@@ -125,8 +141,9 @@ DdaTraversalOutput dda_traverse_near_high_quality(
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     uint3 block_pos = 0;
+    float distance = 0;
 
-    return dda_near_high_quality<128>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, 0.0);
+    return dda_near_high_quality<128>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
 }
 
 DdaTraversalOutput dda_traverse_far_low_quality(   
@@ -134,25 +151,47 @@ DdaTraversalOutput dda_traverse_far_low_quality(
     half3 ray_dir,
     float3 ray_pos,
 ) {
+    float distance = 0.0;
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    float distance = 0.0;
 
     /*
     if (dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance, block_pos)) {
         return DdaTraversalOutput(true, ray_pos + ray_dir * distance, block_pos);
     }
     */
-    
-    if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
-        return DdaTraversalOutput(false);
-    }    
 
-    if (!dda_far_low_quality<2, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
-        return DdaTraversalOutput(false);
-    }    
+        /*
+        if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
+            return DdaTraversalOutput(false);
+        }    
+
+        if (!dda_far_low_quality<2, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
+            return DdaTraversalOutput(false);
+        }  
+        
+        return dda_near_high_quality<32>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
+        */
+
+
     
-    return dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
+    for (int i = 0; i < 8; i++) {
+        if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
+            return DdaTraversalOutput(false);
+        }    
+
+        if (!dda_far_low_quality<1, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
+            return DdaTraversalOutput(false);
+        }  
+        
+        var v = dda_near_high_quality<8>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
+        if (v.hit) {
+            return v;
+        }  
+    }
+    
+    
+    //return dda_near_high_quality<64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance);
 
     /*
     if (!dda_far_low_quality<4, 64>(fetcher, ray_dir, ray_pos, inv_dir, dir_sign, distance)) {
@@ -169,6 +208,8 @@ DdaTraversalOutput dda_traverse_far_low_quality(
         return DdaTraversalOutput(false);
     }
     */
+
+    return DdaTraversalOutput(false);
 }
 
 bool dda_far_low_quality<let K : int16_t, let N : int>(
@@ -190,11 +231,11 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
             return false;
         }
 
-        uint64_t raw = fetcher.fetch_raw((int3)(floored_pos), MAX(K, 0));
+        bool test = fetcher.fetch_raw((int3)(floored_pos), MAX(K, 0)) != 0;
 
-        if (raw != 0) {
+        if (test) {
             float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * (1 << MAX(K, 0)));
-            distance += local_dist;
+            distance += local_dist  - 0.1;
             return true;
         }
 
@@ -204,10 +245,10 @@ bool dda_far_low_quality<let K : int16_t, let N : int>(
     }
 
     float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * (1 << MAX(K, 0)));
-    distance += local_dist;
+    distance += local_dist - 0.1;
 
 
-    return false;
+    return true;
 }
 
 
@@ -217,8 +258,9 @@ DdaTraversalOutput dda_near_high_quality<let N : int>(
     float3 ray_pos,
     half3 inv_dir,
     int8_t3 dir_sign,
-    float base_distance,
+    inout float base_distance,
 ) {
+    float tmp = base_distance;
     float3 modified_pos = (ray_pos + ray_dir * base_distance);
     uint16_t3 floored_pos = (uint16_t3)floor(modified_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
@@ -233,14 +275,13 @@ DdaTraversalOutput dda_near_high_quality<let N : int>(
         uint64_t raw = fetcher.fetch_raw((int3)(floored_pos), 0);
 
         if (raw != 0) {
-            float distance = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) + base_distance;
+            base_distance = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) + tmp  - 0.1;
             
             uint3 brick_pos = 0;
             uint8_t face = 0;
-            if (dda_bitset_simple(raw, ray_pos, ray_dir, distance, floored_pos, inv_dir, dir_sign, brick_pos, face)) {
-                return DdaTraversalOutput(true, ray_pos, brick_pos, face);
+            if (dda_bitset_simple(raw, ray_pos, ray_dir, base_distance, floored_pos, inv_dir, dir_sign, brick_pos, face)) {
+                return DdaTraversalOutput(true, ray_pos + ray_dir * base_distance, brick_pos, face);
             }
-
         }
 
         eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
@@ -248,6 +289,7 @@ DdaTraversalOutput dda_near_high_quality<let N : int>(
         floored_pos += select(eqs, dir_sign, (int16_t3)0);
     }
 
+    base_distance = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) + tmp  - 0.1;
 
     return DdaTraversalOutput(false);
 }
@@ -256,6 +298,7 @@ bool dda<let N : int>(
     Fetcher fetcher,
     float3 ray_dir,
     float3 ray_pos,
+    out float dist
 ) {
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
@@ -277,6 +320,7 @@ bool dda<let N : int>(
             uint3 brick_pos = 0;
             uint8_t face = 0;
             if (dda_bitset_simple(raw, ray_pos, ray_dir, local_dist, floored_pos, inv_dir, dir_sign, brick_pos, face)) {
+                dist = local_dist;
                 return true;
             }
         }
