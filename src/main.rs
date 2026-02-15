@@ -1,5 +1,8 @@
 #![allow(unused_variables)]
 #![allow(dead_code)]
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(unused_imports)]
+
 mod assets;
 mod debug;
 use assets::convert;
@@ -620,8 +623,8 @@ impl InternalApp {
         let size = vek::Vec2::<u32>::new(size.width, size.height)
             .map(|val| val / swapchain::SCALING_FACTOR);
 
-        let width_group_size = (size.x as f32 / 16f32).ceil() as u32;
-        let height_group_size = (size.y as f32 / 16f32).ceil() as u32;
+        let width_group_size = (size.x as f32 / 8f32).ceil() as u32;
+        let height_group_size = (size.y as f32 / 8f32).ceil() as u32;
 
         let size = size.map(|x| x as f32);
 

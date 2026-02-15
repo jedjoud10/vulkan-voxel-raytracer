@@ -18,7 +18,7 @@ pub struct Movement {
 impl Movement {
     pub fn new() -> Self {
         Self {
-            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32 - 30f32, 30f32, crate::voxel::SIZE as f32 / 2f32 - 30f32),
+            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32 - 80f32, 30f32, crate::voxel::SIZE as f32 / 2f32 - 80f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
             //position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 60f32, crate::voxel::SIZE as f32 / 2f32),
             ..Default::default()

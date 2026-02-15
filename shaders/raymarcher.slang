@@ -18,7 +18,7 @@ Texture3D<uint> voxels_indices;
 StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 
 [[vk::binding(5, 0)]]
-StructuredBuffer<uint16_t> svo_indices_buffer;
+StructuredBuffer<uint32_t> svo_indices_buffer;
 
 [SpecializationConstant] const bool USE_PIXELATED_SHADOWS = false;
 [SpecializationConstant] const bool USE_ROUND_NORMALS = false;
@@ -36,106 +36,20 @@ enum DebugType: uint {
 groupshared uint min_clock;
 groupshared uint max_clock;
 
+static const int DEPTH = 3;
+static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
-bool dda_multi_level<let K : int>(
-    uint16_t base_index,
-    uint64_t raw,
-    float3 ray_dir,
-    float3 ray_pos,
-    half3 inv_dir,
-    int8_t3 dir_sign,
-    float distance,
-) {
-    int voxel_size = 1 << max(K, 0);
-    float3 modified_ray_pos = (ray_pos + ray_dir * (distance - 0.01)) / voxel_size;
-
-    /*
-    uint3 sub_cell_start_pos = (uint3)floor((ray_pos + ray_dir * ((float)popped.distance + 1.5)) / voxel_size);
-    uint3 sub_cell_end_pos = sub_cell_start_pos + 1;
-    */
-
-    float3 floored_pos = floor(modified_ray_pos);
-    float3 side_dist = (floored_pos - modified_ray_pos + 0.5 + 0.5 * dir_sign);
-
-    int face_local = 0;
-    for (int i = 0; i < DDA_STEPS; i++) {
-        // skip if we are outside the bounds of the map
-        if (any((int3)(floored_pos) < 0) || any((int3)(floored_pos) >= (SIZE >> max(K, 0)))) {
-            break;
-        }
-
-        uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
-        uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
-        
-        /*
-        // handle partially full nodes / leaf voxel nodes
-        if (raw != 0) {
-            float3 test = (floored_pos * voxel_size - ray_pos + voxel_size * 0.5 - 0.5 * voxel_size * dir_sign) * inv_dir;
-            float dist = max3(test.x, test.y, test.z);
-
-            // completely full nodes are well, completely full. we can do the leaf-level logic since we know we can skip them
-            if ((raw & 4) == 4) {
-                stats.full_halts++;
-            
-                // set output parameters
-                float3 w = ray_pos + ray_dir * dist;
-                output.world = w;
-                output.face = face_local;
-                output.block_pos = (uint3)floor(w + ray_dir * 0.02);
-                
-                return true;
-            }
-
-
-            if (K > 0) {
-                stats.recursions++;
-
-                int3 next_min_bounds_world_space = (int3)floored_pos * voxel_size;
-                int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
-
-
-                if (dda_multi_level<K-LEVEL_DIFF, hasFace, hasWorld, hasBlockPos>(fetcher, ray_dir, ray_pos, next_min_bounds_world_space, next_max_bounds_world_space, inv_dir, dir_sign, max(dist, 0), stats, output)) {
-                    return true;
-                }
-            } else {
-                // set output parameters
-                output.world = ray_pos + ray_dir * dist;
-                output.face = face_local;
-                output.block_pos = (uint3)floored_pos;
-                
-                return true;
-            }
-        }
-
-
-
-        stats.total_iterations++;
-        */
-
-        float3 reconst = side_dist * inv_dir;
-        bool3 t = min3(reconst.x, reconst.y, reconst.z) == reconst;
-        int3 eqs = select(t, 1, 0);
-        face_local = firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-        floored_pos += select(t, dir_sign, 0);
-        side_dist += select(t, dir_sign, 0);
-    }
-    
-
-    return false;
-}
-
-#define MAX(a, b)  (((a) > (b)) ? (a) : (b)) 
 
 bool test2<let K : int>(
-    uint16_t base_index,
+    uint32_t base_index,
     uint64_t raw,
     float3 ray_dir,
     float3 ray_pos,
     half3 inv_dir,
     int8_t3 dir_sign,
     float distance,
-    int3 bounds_min,
-    int3 bounds_max,
+    uint16_t3 bounds_min,
+    uint16_t3 bounds_max,
     out float3 col,
 ) {
     if (raw == 0) {
@@ -143,11 +57,11 @@ bool test2<let K : int>(
     }
 
     int voxel_size = 1 << max(K*2, 0);
-    int3 min_bounds_local_space = bounds_min / voxel_size;
-    int3 max_bounds_local_space = bounds_max / voxel_size;
+    uint16_t3 min_bounds_local_space = bounds_min / voxel_size;
+    uint16_t3 max_bounds_local_space = bounds_max / voxel_size;
 
     float3 modified_ray_pos = (ray_pos + ray_dir * (distance + 0.01)) / voxel_size;
-    uint16_t3 floored_pos = (int3)floor(modified_ray_pos);
+    int16_t3 floored_pos = (int16_t3)floor(modified_ray_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     bool3 eqs = 0;
 
@@ -156,12 +70,12 @@ bool test2<let K : int>(
     [loop]
     for (uint8_t i = 0; i < 12; i++) {
         col.y += 0.01;
-        if (any(floored_pos < 0 | floored_pos >= (SIZE / voxel_size))) {
+        if (any(floored_pos < 0 | floored_pos >= (TOTAL_SIZE / voxel_size))) {
             return false;
         }
 
-        bool oob = any((int3)(floored_pos) < (min_bounds_local_space) | (int3)(floored_pos) > (max_bounds_local_space - 1));
-        bool oob_loose = any((int3)(floored_pos) < (min_bounds_local_space-1) | (int3)(floored_pos) > (max_bounds_local_space));
+        bool oob = any((floored_pos) < (min_bounds_local_space) | (int3)(floored_pos) > ((int3)max_bounds_local_space - 1));
+        bool oob_loose = any((int3)(floored_pos) < ((int3)min_bounds_local_space-1) | floored_pos > (max_bounds_local_space));
         
         
         if (oob_loose) {
@@ -171,32 +85,36 @@ bool test2<let K : int>(
         uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
         uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
 
-        if (bit_index < 64 && ((raw >> bit_index) & 1) == 1 && !oob) {            
+        if (bit_index < 64 && ((raw >> bit_index) & 1) == 1 && !oob) {  
             if (K > 0) {
-                uint16_t new_base_index = svo_indices_buffer[base_index + bit_index];
+                // calculate child offset index, which is NOT the same as the bit index
+                // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
+                // create a mask for the first `n` bits
+                uint64_t mask = (1 << bit_index) - 1;
+                uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
+                uint32_t actual_child_index = base_index + child_offset_index;
+
+                uint32_t new_base_index = svo_indices_buffer[actual_child_index];
                 
                 if (new_base_index != 0xFFFF) {
-                    uint64_t new_raw = svo_bitmasks_buffer[base_index + bit_index];
+                    uint64_t new_raw = svo_bitmasks_buffer[actual_child_index];
 
-                    int3 next_min_bounds_world_space = (int3)floored_pos * voxel_size;
-                    int3 next_max_bounds_world_space = (int3)floored_pos * voxel_size + voxel_size;
+                    uint16_t3 next_min_bounds_world_space = (uint16_t3)floored_pos * voxel_size;
+                    uint16_t3 next_max_bounds_world_space = (uint16_t3)floored_pos * voxel_size + voxel_size;
 
                     if (new_raw == -1 && new_base_index == 0xFFFF) {
-                        //col = 1.0;
                         return true;
                     }
 
-                    float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) + 0.01;
+                    float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) + 0.001;
 
-                    if (test2<K - 1>(new_base_index, raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, next_min_bounds_world_space, next_max_bounds_world_space, col)) {
+                    if (test2<K - 1>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, next_min_bounds_world_space, next_max_bounds_world_space, col)) {
                         return true;
                     }
                 } else {
                     return true;
                 }
             } else {
-                //col = 1.0;
-                //col = (float)i / 16.0;
                 return true;
             }
         }
@@ -214,12 +132,12 @@ float3 test(float3 ray_dir, float3 ray_pos) {
     half3 inv_dir = (half3)1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     float3 col = 0.0;
-    bool hit = test2<4>(0, svo_bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 9999999, col);
+    bool hit = test2<DEPTH-1>(1, svo_bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 9999999, col);
     return col;
 }
 
 [shader("compute")]
-[numthreads(16, 16, 1)]
+[numthreads(8, 8, 1)]
 void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
 
     if (all(lid.xy == 0)) {
