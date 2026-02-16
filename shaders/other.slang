@@ -1,16 +1,33 @@
 #ifndef OTHER
 #define OTHER
 #include <hash.slang>
-#include <queue.slang>
-#include <stack.slang>
-#include <octree.slang>
 #include <voxel.slang>
-#include <debug_util.slang>
 
 static const int MIP_LEVELS = 9;
 static const int SIZE = 1 << (MIP_LEVELS-1);
 static const uint INVALID = 0x3FFFFFF;
 
+
+struct RayInput {
+    float4 position;
+    float4 direction;
+}
+
+struct RayOutput {
+    bool hit;
+}
+
+// assumes that groups are of size 8x8
+uint encode_ray_index(uint2 id, uint2 local_thread_id, uint2 group_id, uint2 screen_size) {
+    // naive attempt
+    //return id.x + id.y * screen_size.x;
+    
+    // this one is a bit better since it follows the thread grouping of the screen compute shader
+    // meaning that rays that are in 8x8 blocks will have close/neighbouring indices 
+    uint inside_group_index = local_thread_id.x + local_thread_id.y * 8;
+    uint whole_group_index = group_id.x + group_id.y * (screen_size.x / 8);
+    return whole_group_index * 64 + inside_group_index;
+}
 
 struct Fetcher {
     Texture3D<uint64_t> voxels;

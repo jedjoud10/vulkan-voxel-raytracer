@@ -20,6 +20,7 @@ mod swapchain;
 mod voxel;
 mod ticker;
 mod buffer;
+mod rays;
 
 use ash;
 use ash::vk;
@@ -38,14 +39,10 @@ use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 
-use crate::buffer::{Buffer, create_counter_buffer, create_buffer};
-use crate::pipeline::ComputePipeline;
-use crate::pipeline::MultiComputePipeline;
-use crate::pipeline::VoxelGeneratePipeline;
-use crate::pipeline::VoxelTickPipeline;
-use crate::voxel::_SIZE;
-use crate::voxel::SparseVoxelOctree;
-use crate::voxel::VoxelImage;
+use crate::buffer::*;
+use crate::pipeline::*;
+use crate::rays::*;
+use crate::voxel::*;
 
 struct InternalApp {
     input: Input,
@@ -75,9 +72,12 @@ struct InternalApp {
     queue_family_index: u32,
     pool: vk::CommandPool,
 
-    render_compute_pipeline: ComputePipeline,
+    render_compute_pipeline: RenderPipeline,
     generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
+    ray_trace_pipeline: RayTracePipeline,
+
+    ray_trace_buffers: RayTraceBuffers,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
@@ -100,6 +100,7 @@ impl InternalApp {
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
         asset!("voxel_generate.spv", assets);
+        asset!("ray_stuff.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -292,6 +293,11 @@ impl InternalApp {
             &svo
         );
 
+        let ray_trace_pipeline = rays::create_ray_trace_compute_pipeline(&*assets["ray_stuff.spv"], &device, &debug_marker);
+        log::info!("created ray trace pipeline");
+        let ray_trace_buffers = rays::create_ray_trace_buffers(&device, &mut allocator, &debug_marker);
+        log::info!("created ray trace buffers");
+
         Self {
             input: Default::default(),
             movement: Movement::new(),
@@ -331,6 +337,8 @@ impl InternalApp {
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
             debug_type: 0,
+            ray_trace_pipeline,
+            ray_trace_buffers,
         }
     }
 
@@ -454,6 +462,7 @@ impl InternalApp {
             delta: delta.max(1f32 / ticker::TICKS_PER_SECOND),
         };
 
+        /*
         let desc_temp = self.ticker.update(delta).then(|| voxel::execute_voxel_tick_compute(
             &self.device,
             cmd,
@@ -470,6 +479,7 @@ impl InternalApp {
             &self.tick_voxel_compute_pipeline,
             push_constants
         ));
+        */
 
         let subresource_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -522,101 +532,71 @@ impl InternalApp {
             }, &[subresource_range]);
         */
 
-        let layouts = [self.render_compute_pipeline.descriptor_set_layout];
+
+        // we need: render compute + pipeline + ray compute pipeline
+        let layouts = [self.render_compute_pipeline.descriptor_set_layout, self.ray_trace_pipeline.descriptor_set_layout];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(self.descriptor_pool)
             .set_layouts(&layouts);
-        let descriptor_sets = self
+        let all_descriptor_sets_for_frame = self
             .device
             .allocate_descriptor_sets(&descriptor_set_allocate_info)
             .unwrap();
-        let descriptor_set = descriptor_sets[0];
+        let render_descriptor_set = all_descriptor_sets_for_frame[0];
+        let ray_trace_descriptor_set = all_descriptor_sets_for_frame[1];
+
 
         let descriptor_rt_image_info = vk::DescriptorImageInfo::default()
             .image_view(src_image_view)
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
-        let descriptor_voxel_image_info = vk::DescriptorImageInfo::default()
-            .image_view(self.voxel_image.image_view_whole)
-            .image_layout(vk::ImageLayout::GENERAL)
-            .sampler(vk::Sampler::null());
-        let descriptor_voxel_surface_index_image_info = vk::DescriptorImageInfo::default()
-            .image_view(self.voxel_surface_index_image.2)
-            .image_layout(vk::ImageLayout::GENERAL)
-            .sampler(vk::Sampler::null());
-        let descriptor_voxel_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.voxel_surface_buffer.buffer)
+        let descriptor_ray_inputs_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.ray_trace_buffers.ray_inputs.buffer)
             .offset(0)
             .range(u64::MAX);
-        let descriptor_svo_bitmasks_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.svo.bitmask_buffer.buffer)
-            .offset(0)
-            .range(u64::MAX);
-        let descriptor_svo_indices_buffer_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.svo.index_buffer.buffer)
+        let descriptor_ray_outputs_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.ray_trace_buffers.ray_outputs.buffer)
             .offset(0)
             .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
-        let descriptor_voxel_image_infos = [descriptor_voxel_image_info];
-        let descriptor_voxel_surface_index_image_infos = [descriptor_voxel_surface_index_image_info];
-        let descriptor_voxel_buffer_infos = [descriptor_voxel_buffer_info];
-        let descriptor_svo_bitmasks_buffer_infos = [descriptor_svo_bitmasks_buffer_info];
-        let descriptor_svo_indices_buffer_infos = [descriptor_svo_indices_buffer_info];
+        let descriptor_ray_inputs_infos = [descriptor_ray_inputs_info];
+        let descriptor_ray_outputs_infos = [descriptor_ray_outputs_info];
 
         let descriptor_write_1 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
-            .dst_set(descriptor_set)
+            .dst_set(render_descriptor_set)
             .image_info(&descriptor_rt_image_infos);
         let descriptor_write_2 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(1)
-            .dst_set(descriptor_set)
-            .image_info(&descriptor_voxel_image_infos);
+            .dst_set(render_descriptor_set)
+            .buffer_info(&descriptor_ray_inputs_infos);
         let descriptor_write_3 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(2)
-            .dst_set(descriptor_set)
-            .buffer_info(&descriptor_voxel_buffer_infos);
-        let descriptor_write_4 = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .dst_binding(3)
-            .dst_set(descriptor_set)
-            .image_info(&descriptor_voxel_surface_index_image_infos);
-        let descriptor_write_5 = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .dst_binding(4)
-            .dst_set(descriptor_set)
-            .buffer_info(&descriptor_svo_bitmasks_buffer_infos);
-        let descriptor_write_6 = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .dst_binding(5)
-            .dst_set(descriptor_set)
-            .buffer_info(&descriptor_svo_indices_buffer_infos);
+            .dst_set(render_descriptor_set)
+            .buffer_info(&descriptor_ray_outputs_infos);
         
 
-        self.device
-            .update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3, descriptor_write_4, descriptor_write_5, descriptor_write_6], &[]);
+        self.device.update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3], &[]);
 
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
-            self.render_compute_pipeline.pipeline_layout,
+            self.render_compute_pipeline.entry_points[0].pipeline_layout,
             0,
-            &descriptor_sets,
+            &[render_descriptor_set],
             &[],
         );
         self.device.cmd_bind_pipeline(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
-            self.render_compute_pipeline.pipeline,
+            self.render_compute_pipeline.entry_points[0].pipeline,
         );
 
         let size = self.window.inner_size();
@@ -625,11 +605,10 @@ impl InternalApp {
 
         let width_group_size = (size.x as f32 / 8f32).ceil() as u32;
         let height_group_size = (size.y as f32 / 8f32).ceil() as u32;
-
-        let size = size.map(|x| x as f32);
+        let size_f32 = size.map(|x| x as f32);
 
         let push_constants = pipeline::PushConstants {
-            screen_resolution: size,
+            screen_resolution: size_f32,
             _padding: Default::default(),
             matrix: self.movement.proj_matrix * self.movement.view_matrix,
             position: self.movement.position.with_w(0f32),
@@ -641,13 +620,41 @@ impl InternalApp {
 
         self.device.cmd_push_constants(
             cmd,
-            self.render_compute_pipeline.pipeline_layout,
+            self.render_compute_pipeline.entry_points[0].pipeline_layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
             raw,
         );
-        self.device
-            .cmd_dispatch(cmd, width_group_size, height_group_size, 1);
+
+        let barrier = vk::MemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
+        let barriers = [barrier];
+        let dep_wait_all: vk::DependencyInfo<'_> = vk::DependencyInfo::default().memory_barriers(&barriers);
+
+        // generate rays, store data in `ray_inputs` buffer
+        self.device.cmd_dispatch(cmd, width_group_size, height_group_size, 1);
+
+        // execute the ray trace pipeline now
+        self.device.cmd_pipeline_barrier2(cmd, &dep_wait_all);
+        rays::trace_rays(&self.device, cmd, all_descriptor_sets_for_frame[1], &self.ray_trace_buffers, &self.ray_trace_pipeline, &self.svo, size.x * size.y, self.movement.position);
+        self.device.cmd_pipeline_barrier2(cmd, &dep_wait_all);
+
+        // execute the apply pipeline that fetches result from the ray trace pipeline
+        self.device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.render_compute_pipeline.entry_points[1].pipeline_layout,
+            0,
+            &[render_descriptor_set],
+            &[],
+        );
+        self.device.cmd_bind_pipeline(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.render_compute_pipeline.entry_points[1].pipeline,
+        );
+        self.device.cmd_dispatch(cmd, width_group_size, height_group_size, 1);
 
         let src_shader_write_to_transfer_src = vk::ImageMemoryBarrier2::default()
             .old_layout(vk::ImageLayout::GENERAL)
@@ -761,12 +768,14 @@ impl InternalApp {
         self.device.destroy_image_view(src_image_view, None);
         self.device.destroy_image_view(dst_image_view, None);
         self.device
-            .free_descriptor_sets(self.descriptor_pool, &descriptor_sets)
+            .free_descriptor_sets(self.descriptor_pool, &all_descriptor_sets_for_frame)
             .unwrap();
         
+        /*
         if let Some(desc_temp) = desc_temp{
             self.device.free_descriptor_sets(self.descriptor_pool, &[desc_temp]).unwrap();
         }
+        */
     }
 
     pub unsafe fn destroy(mut self) {
@@ -778,6 +787,9 @@ impl InternalApp {
 
         self.generate_voxel_compute_pipeline.destroy(&self.device);
         log::info!("destroyed generate voxel compute pipeline");
+
+        self.ray_trace_pipeline.destroy(&self.device);
+        log::info!("destroyed ray trace compute pipeline");
 
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");
@@ -807,6 +819,9 @@ impl InternalApp {
 
         self.svo.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVO buffer");
+
+        self.ray_trace_buffers.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed ray trace buffers");
 
         // TODO: Just cope with the error messages vro
         self.device

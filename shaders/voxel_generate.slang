@@ -1,5 +1,4 @@
 #include <other.slang>
-#include <octree.slang>
 #include <noises.slang>
 
 [[vk::binding(0, 0)]]

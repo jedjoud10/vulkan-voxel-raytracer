@@ -470,15 +470,20 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                 if (y == 0) {
                     children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
                 }
+
+                if (y == 1 && (pseudo_random(0x03f23 ^ base ^ seed) % 2) == 0) {
+                    children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
+                }
             }
         }
     }
 
+    
     for x in 0..8 {
         let index = pseudo_random(x ^ 0x03f23 ^ base ^ seed) % 64;
         children[index as usize] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, index ^ x)));
     }
-
+    
     Node {
         children: Some(Box::new(children)),
         bottom: base == 1,
@@ -486,7 +491,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    return test_sparse_voxel_octree_recurse(5, 0x0323f);
+    return test_sparse_voxel_octree_recurse(2, 0x0323f);
 
     let mut children = [const { None }; 64];
 
@@ -597,18 +602,187 @@ pub unsafe fn convert_mips_svo(
     voxel_image: &VoxelImage,
     svo: &SparseVoxelOctree,
 ) {
+    log::info!("converting voxel mip maps to SVO...");
+
+    // init: fill the index buffer with invalid indices (0xFFFF)
+    buffer::fill_buffer(&device, pool, queue, svo.index_buffer.buffer, u32::MAX);
+
+    
+    let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
+        .command_buffer_count(1)
+        .level(vk::CommandBufferLevel::PRIMARY)
+        .command_pool(pool);
+    let cmd = device
+        .allocate_command_buffers(&cmd_buffer_create_info)
+        .unwrap()[0];
+
+    let cmd_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+    device
+        .begin_command_buffer(cmd, &cmd_buffer_begin_info)
+        .unwrap();
+
+    /*
+    // we will need multiple descriptor sets
+    // the first one will be for the initial voxel generation
+    // the rest are needed for the propagation of voxel values upwards in the mip-chain. each descriptor set will have the "previous-image" binding and "current-image" bindings
+    let layouts = Vec::from_iter(std::iter::repeat_n(voxel_generate_pipeline.descriptor_set_layout, MIP_LEVELS));
+
+    // updates the descriptors once and for all
+    // this way, subsequent dispatch calls can use the updated descriptors directly
+    let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+        .descriptor_pool(descriptor_pool)
+        .set_layouts(&layouts);
+    let descriptor_sets = device
+        .allocate_descriptor_sets(&descriptor_set_allocate_info)
+        .unwrap();
+    {    
+        let descriptor_base_layer_voxel_image_info = vk::DescriptorImageInfo::default()
+            .image_view(voxel_mips[0])
+            .image_layout(vk::ImageLayout::GENERAL)
+            .sampler(vk::Sampler::null());
+        let descriptor_image_infos = [descriptor_base_layer_voxel_image_info];
+    
+        // the first descriptor that we allocated will be used for the src voxel image that we will write to originally
+        let base_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .dst_binding(0)
+            .dst_set(descriptor_sets[0])
+            .image_info(&descriptor_image_infos);
+        device.update_descriptor_sets(&[base_descriptor_write], &[]);
+        log::info!("updated bottom mip-level descriptor");
+
+        // we must also write the descriptor sets for the propagated voxel images
+        for i in 1..MIP_LEVELS {
+            let previous_image_view = voxel_mips[i-1];
+            let next_image_view = voxel_mips[i];
+
+            let descriptor_previous_voxel_image_info = vk::DescriptorImageInfo::default()
+                .image_view(previous_image_view)
+                .image_layout(vk::ImageLayout::GENERAL)
+                .sampler(vk::Sampler::null());
+            let descriptor_next_voxel_image_info = vk::DescriptorImageInfo::default()
+                .image_view(next_image_view)
+                .image_layout(vk::ImageLayout::GENERAL)
+                .sampler(vk::Sampler::null());
+            let descriptor_image_infos = [descriptor_previous_voxel_image_info, descriptor_next_voxel_image_info];
+
+            let propagate_descriptor_write = vk::WriteDescriptorSet::default()
+                .descriptor_count(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .dst_binding(1)
+                .dst_set(descriptor_sets[i])
+                .image_info(&descriptor_image_infos);
+
+            device.update_descriptor_sets(&[propagate_descriptor_write], &[]);
+            log::info!("updated mip-level {i} descriptor");
+        }
+    }
+
+    device.cmd_bind_descriptor_sets(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        voxel_generate_pipeline.entry_points[0].pipeline_layout,
+        0,
+        &descriptor_sets[0..1],
+        &[],
+    );
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        voxel_generate_pipeline.entry_points[0].pipeline,
+    );
+
+    device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
+
+    let second_transition = vk::ImageMemoryBarrier2::default()
+        .old_layout(vk::ImageLayout::GENERAL)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+        .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_queue_family_index(queue_family_index)
+        .dst_queue_family_index(queue_family_index)
+        .image(voxel_image)
+        .subresource_range(single_mip_subresource_range);
+    let image_memory_barriers = [second_transition];
+    let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+    device.cmd_pipeline_barrier2(cmd, &dep);
+
+    device.cmd_bind_pipeline(
+        cmd,
+        vk::PipelineBindPoint::COMPUTE,
+        voxel_generate_pipeline.entry_points[1].pipeline,
+    );
+
+    for i in 1..MIP_LEVELS {
+        let previous_image_view = voxel_mips[i-1];
+        let next_image_view = voxel_mips[i];
+
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            voxel_generate_pipeline.entry_points[1].pipeline_layout,
+            0,
+            &descriptor_sets[(i)..(i+1)],
+            &[],
+        );
+        
+        device.cmd_dispatch(cmd, SIZE / 8, SIZE / 8, SIZE / 8);
+
+        let next_voxel_image_subresource_range = vk::ImageSubresourceRange::default()
+            .base_mip_level(i as u32)
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_array_layer(0)
+            .layer_count(1)
+            .level_count(1);
+
+
+        let next_voxel_image_memory_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::MEMORY_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(queue_family_index)
+            .dst_queue_family_index(queue_family_index)
+            .image(voxel_image)
+            .subresource_range(next_voxel_image_subresource_range);
+        let image_memory_barriers: [vk::ImageMemoryBarrier2<'_>; 1] = [next_voxel_image_memory_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        device.cmd_pipeline_barrier2(cmd, &dep);
+    }
+
+    device.end_command_buffer(cmd).unwrap();
+
+    let cmds = [cmd];
+    let submit_info = vk::SubmitInfo::default()
+        .command_buffers(&cmds)
+        .signal_semaphores(&[])
+        .wait_dst_stage_mask(&[])
+        .wait_semaphores(&[]);
+
+    let fence = device.create_fence(&Default::default(), None).unwrap();
+
+    device.queue_submit(queue, &[submit_info], fence).unwrap();
+    device.wait_for_fences(&[fence], true, u64::MAX).unwrap();
+    device.free_command_buffers(pool, &[cmd]);
+    device.free_descriptor_sets(descriptor_pool, &descriptor_sets).unwrap();
+    device.destroy_fence(fence, None);
+    */
+
     log::debug!("creating svo nodes...");
     let test = test_sparse_voxel_octree_root();
-
     let (bitset_vec, index_vec) = convert_to_buffers(test);
 
     let bitmask_data = bitset_vec.as_slice();
     let bitmask_data_bytes: &[u8] = bytemuck::cast_slice(bitmask_data); 
 
     buffer::write_to_buffer(device, pool, queue, svo.bitmask_buffer.buffer, allocator, bitmask_data_bytes);
-
-    // init: fill the index buffer with invalid indices (0xFFFF)
-    buffer::fill_buffer(&device, pool, queue, svo.index_buffer.buffer, u32::MAX);
 
     let index_data = index_vec.as_slice();
     let index_data_bytes: &[u8] = bytemuck::cast_slice(&index_data); 

@@ -96,7 +96,7 @@ fn main() {
     let global_session = GlobalSession::new().unwrap();
 
     let session_options = CompilerOptions::default()
-        .optimization(OptimizationLevel::Maximal)
+        .optimization(OptimizationLevel::None)
         .debug_information(DebugInfoLevel::None)
         .obfuscate(false)
         .no_mangle(false)

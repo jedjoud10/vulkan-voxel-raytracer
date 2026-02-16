@@ -24,6 +24,10 @@
         - Naive Octree Traversal: Just checks each node's 8 children using an AABB test...
         - DDA Recursive (stackless): Uses DDA to speed things up and recurses by calling the function itself. **Fastest one so far**
         - DDA Recursive (stack): Uses DDA to speed things up and stores results in an intermediate stack to be handled next iteration.
+- Implement *sparse voxel octree* using buffer
+    - Instead of storing the octree as mips inside a texture, we instead store a *sparse octree* inside a buffer
+    - This *requires* us to recurse through the structure unfortunately, but it leads to much lower memory usage and we can use 64 bit brickmap logic to accelerate DDA as well
+    - Again, this is problematic due to high VGPR pressure, which hurts occupancy. Some buffery latency is not able to be fully hidden away because of this
 - Micro-Voxels: Implemented by storing a ```u64``` inside the voxel texture, which allows us to run a DDA on for sub-meter voxels.
 - DDA "pre-computation" buffer: precomputes all the possible ```u64``` bitmasks on the CPU and uploads them to the GPU so that instead of doing "micro-DDA" we can just do a bitwise ```AND``` and check if there is an intersection between the ray and the micro-voxels. Works, but is *not* faster than just naive DDA. This is due to many reasons:
     - This is how it works:
