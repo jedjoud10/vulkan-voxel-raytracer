@@ -97,10 +97,22 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
+    let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
+        .binding(3)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
+    let svo_indices = vk::DescriptorSetLayoutBinding::default()
+        .binding(4)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
     let bindings = [
         output,
         ray_inputs,
-        ray_outputs
+        ray_outputs,
+        svo_bitmasks,
+        svo_indices,
     ];
 
     let render_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()

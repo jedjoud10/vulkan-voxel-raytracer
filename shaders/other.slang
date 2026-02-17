@@ -7,16 +7,6 @@ static const int MIP_LEVELS = 9;
 static const int SIZE = 1 << (MIP_LEVELS-1);
 static const uint INVALID = 0x3FFFFFF;
 
-
-struct RayInput {
-    float4 position;
-    float4 direction;
-}
-
-struct RayOutput {
-    float data;
-}
-
 // assumes that groups are of size 8x8
 uint encode_ray_index(uint2 id, uint2 local_thread_id, uint2 group_id, uint2 screen_size) {
     // naive attempt

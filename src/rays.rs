@@ -200,9 +200,6 @@ pub unsafe fn trace_rays(
     let raw = bytemuck::cast_slice::<u32, u8>(&data);
     device.cmd_update_buffer(cmd, ray_trace_buffers.ray_counts.buffer, 0, raw);
 
-    // clear out the output buffer
-    device.cmd_fill_buffer(cmd, ray_trace_buffers.ray_outputs.buffer, 0, vk::WHOLE_SIZE, 0);
-    
     // dispatch the required number of rays
     let dispatch_size = ray_count.div_ceil(64) as u32;
     device.cmd_dispatch(cmd, dispatch_size, 1, 1);

@@ -76,7 +76,7 @@ impl Movement {
         let velocity = forward * self.local_velocity.y + right * self.local_velocity.x;
         self.velocity = vek::Vec3::lerp(
             self.velocity,
-            velocity * 3.0f32 * speed,
+            velocity * 20.0f32 * speed,
             (40f32 * delta).clamped01(),
         );
 

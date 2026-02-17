@@ -558,32 +558,33 @@ impl InternalApp {
             .buffer(self.ray_trace_buffers.ray_outputs.buffer)
             .offset(0)
             .range(u64::MAX);
+        let descriptor_svo_bitmasks_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.svo.bitmask_buffer.buffer)
+            .offset(0)
+            .range(u64::MAX);
+        let descriptor_svo_indices_info = vk::DescriptorBufferInfo::default()
+            .buffer(self.svo.index_buffer.buffer)
+            .offset(0)
+            .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
-        let descriptor_ray_inputs_infos = [descriptor_ray_inputs_info];
-        let descriptor_ray_outputs_infos = [descriptor_ray_outputs_info];
+        let descriptor_ray_inputs_infos = [descriptor_ray_inputs_info, descriptor_ray_outputs_info, descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
 
-        let descriptor_write_1 = vk::WriteDescriptorSet::default()
+        let image_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
             .dst_set(render_descriptor_set)
             .image_info(&descriptor_rt_image_infos);
-        let descriptor_write_2 = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
+        let buffer_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(descriptor_ray_inputs_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(1)
             .dst_set(render_descriptor_set)
             .buffer_info(&descriptor_ray_inputs_infos);
-        let descriptor_write_3 = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .dst_binding(2)
-            .dst_set(render_descriptor_set)
-            .buffer_info(&descriptor_ray_outputs_infos);
         
 
-        self.device.update_descriptor_sets(&[descriptor_write_1, descriptor_write_2, descriptor_write_3], &[]);
+        self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write], &[]);
 
         self.device.cmd_bind_descriptor_sets(
             cmd,

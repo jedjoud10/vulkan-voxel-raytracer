@@ -43,6 +43,13 @@
     - Bad occupancy: due to recursive octree traversal, occupancy is in shambles (4/16 on my 780m).
     - Computing the unique index for the buffer is very expensive: I don't know how to improve this. I need a better encoding scheme than just ``` ray enter face + ray exit face + enter face segment + exit face segment ```
 
+## Resources Used
+- Friend & Folkd from the Order of The Simulation Discord Server. Very smart people!
+- https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
+- https://www.shadertoy.com/view/lfyGRW
+- https://www.shadertoy.com/view/lc3SDX
+
+
 ## TODO
 - Implement multiple chunk rendering
     - *Tip For Shadows*: At far enough distances, the per-voxel face texels will occupy less than one pixel on the screen. This means that it would be cheaper to do shadows for *each pixel*, instead of for *each voxel face texel*. 
