@@ -42,5 +42,6 @@ void generateRays(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, ui
 void applyRays(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid: SV_GroupID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type) {
     uint index = encode_ray_index(id.xy, lid.xy, gid.xy, (uint2)screen);
     RayOutput result = ray_outputs[index];
-    output[id.xy] = result.hit ? 1 : 0;
+    //output[id.xy] = float4(result.hit ? 1 : 0, result.hit2 ? 1 : 0, 0, 0);
+    output[id.xy] = float4((result.data % 100) / 100.0);
 }

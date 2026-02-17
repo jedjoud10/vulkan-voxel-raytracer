@@ -41,7 +41,7 @@ pub unsafe fn create_ray_trace_buffers(
     const MAX_RAYS: usize = 4096 * 64 * 32 * 2;
     
     let ray_input_struct_size = size_of::<Vec3::<f32>>() * 3;
-    let ray_output_struct_size = size_of::<bool>();
+    let ray_output_struct_size = size_of::<u32>();
 
     log::info!("create ray trace buffers");
     RayTraceBuffers {

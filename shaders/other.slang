@@ -14,7 +14,7 @@ struct RayInput {
 }
 
 struct RayOutput {
-    bool hit;
+    float data;
 }
 
 // assumes that groups are of size 8x8
