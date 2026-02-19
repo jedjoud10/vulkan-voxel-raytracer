@@ -65,7 +65,7 @@ impl<const N: usize> MultiComputePipeline<N> {
 
 pub type VoxelGeneratePipeline = MultiComputePipeline<2>;
 pub type VoxelTickPipeline = MultiComputePipeline<4>;
-pub type RenderPipeline = MultiComputePipeline<2>;
+pub type RenderPipeline = MultiComputePipeline<1>;
 
 pub unsafe fn create_render_compute_pipeline(
     raw: &[u32],
@@ -87,30 +87,18 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
-    let ray_inputs = vk::DescriptorSetLayoutBinding::default()
+    let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
         .binding(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let ray_outputs = vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1);
-    let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
-        .binding(3)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .descriptor_count(1);
     let svo_indices = vk::DescriptorSetLayoutBinding::default()
-        .binding(4)
+        .binding(2)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
     let bindings = [
         output,
-        ray_inputs,
-        ray_outputs,
         svo_bitmasks,
         svo_indices,
     ];
@@ -127,13 +115,12 @@ pub unsafe fn create_render_compute_pipeline(
     let render_compute_descriptor_set_layouts = [render_compute_descriptor_set_layout];
 
     let push_constant_size = Some(size_of::<PushConstants>());
-    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "generateRays", render_compute_descriptor_set_layout, push_constant_size);
-    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "applyRays", render_compute_descriptor_set_layout, push_constant_size);
+    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size);
     
     return MultiComputePipeline {
         module: render_compute_shader_module,
         descriptor_set_layout: render_compute_descriptor_set_layout,
-        entry_points: [unwrap_entry_point, unpack_entry_point]
+        entry_points: [main_entry_point]
     }
 }
 

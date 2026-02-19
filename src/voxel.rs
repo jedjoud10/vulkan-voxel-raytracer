@@ -115,10 +115,8 @@ pub unsafe fn create_sparse_voxel_octree(
     // TODO: does this make sense? no... but... it works...
     let max_svo_element_size = 4096 * 64 * 64;
 
-    let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks");
-    
-    
-    let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices");
+    let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER);
+    let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER);
 
     SparseVoxelOctree { bitmask_buffer, index_buffer }
 }
@@ -465,24 +463,30 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
     for x in  0..4 {
         for y in 0..4 {
             for z in 0..4 {
+                let vec = vek::Vec3::new(x,y,z);
                 let i = x + y * 4 + z * 4 * 4;
 
-                if (y == 0) {
+                /*
+                if (vec.cmple(&vek::Vec3::broadcast(2)).reduce_and() && vec.cmpge(&vek::Vec3::broadcast(0)).reduce_and()) {
                     children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
                 }
+                */
 
-                if (y == 1 && (pseudo_random(0x03f23 ^ base ^ seed) % 2) == 0) {
+                /*
+                if ((pseudo_random(0x03f23 ^ base ^ seed) % 2) == 0) {
                     children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
                 }
+                */
             }
         }
     }
 
-    
     for x in 0..8 {
-        let index = pseudo_random(x ^ 0x03f23 ^ base ^ seed) % 64;
-        children[index as usize] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, index ^ x)));
+        //let index = pseudo_random((x as u32) ^ 0x03f23 ^ base ^ seed) % 64;
+        let index = x as u32;
+        children[index as usize] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, index ^ (x as u32))));
     }
+    
     
     Node {
         children: Some(Box::new(children)),
@@ -491,7 +495,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    return test_sparse_voxel_octree_recurse(2, 0x0323f);
+    return test_sparse_voxel_octree_recurse(5, 0x0323f);
 
     let mut children = [const { None }; 64];
 
@@ -551,7 +555,7 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
         
         let mut base_child_index = test_count + 1;
 
-        if node.bottom || bitmask == 0 {
+        if node.bottom {
             base_child_index = u32::MAX;
         } else {
             if let Some(children) = node.children.as_ref() {
@@ -569,7 +573,7 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
             }
         }
 
-        if (depth == 0) {
+        if (depth == 1) {
             log::debug!("{:b}, depth: {}, base child index: {}", bitmask, depth, base_child_index);
         }
 

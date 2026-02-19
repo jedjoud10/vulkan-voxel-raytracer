@@ -75,7 +75,6 @@ struct InternalApp {
     render_compute_pipeline: RenderPipeline,
     generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
-    ray_trace_pipeline: RayTracePipeline,
 
     ray_trace_buffers: RayTraceBuffers,
 
@@ -100,7 +99,6 @@ impl InternalApp {
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
         asset!("voxel_generate.spv", assets);
-        asset!("ray_stuff.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -255,19 +253,19 @@ impl InternalApp {
         const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
         const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
 
-        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer");
+        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
         log::info!("created voxel surface buffer");
         
         let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
         log::info!("created voxel surface counter");
 
-        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer");
+        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
         log::info!("created visible surfaces buffer");
 
         let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
         log::info!("created visible surfaces counter");
 
-        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer");
+        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER);
         log::info!("created visible surfaces indirect buffer");
 
         voxel::generate_voxel_image(
@@ -293,8 +291,6 @@ impl InternalApp {
             &svo
         );
 
-        let ray_trace_pipeline = rays::create_ray_trace_compute_pipeline(&*assets["ray_stuff.spv"], &device, &debug_marker);
-        log::info!("created ray trace pipeline");
         let ray_trace_buffers = rays::create_ray_trace_buffers(&device, &mut allocator, &debug_marker);
         log::info!("created ray trace buffers");
 
@@ -337,7 +333,6 @@ impl InternalApp {
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
             debug_type: 0,
-            ray_trace_pipeline,
             ray_trace_buffers,
         }
     }
@@ -534,7 +529,7 @@ impl InternalApp {
 
 
         // we need: render compute + pipeline + ray compute pipeline
-        let layouts = [self.render_compute_pipeline.descriptor_set_layout, self.ray_trace_pipeline.descriptor_set_layout];
+        let layouts = [self.render_compute_pipeline.descriptor_set_layout];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(self.descriptor_pool)
             .set_layouts(&layouts);
@@ -543,21 +538,12 @@ impl InternalApp {
             .allocate_descriptor_sets(&descriptor_set_allocate_info)
             .unwrap();
         let render_descriptor_set = all_descriptor_sets_for_frame[0];
-        let ray_trace_descriptor_set = all_descriptor_sets_for_frame[1];
 
 
         let descriptor_rt_image_info = vk::DescriptorImageInfo::default()
             .image_view(src_image_view)
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
-        let descriptor_ray_inputs_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.ray_trace_buffers.ray_inputs.buffer)
-            .offset(0)
-            .range(u64::MAX);
-        let descriptor_ray_outputs_info = vk::DescriptorBufferInfo::default()
-            .buffer(self.ray_trace_buffers.ray_outputs.buffer)
-            .offset(0)
-            .range(u64::MAX);
         let descriptor_svo_bitmasks_info = vk::DescriptorBufferInfo::default()
             .buffer(self.svo.bitmask_buffer.buffer)
             .offset(0)
@@ -568,7 +554,7 @@ impl InternalApp {
             .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
-        let descriptor_ray_inputs_infos = [descriptor_ray_inputs_info, descriptor_ray_outputs_info, descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
+        let descriptor_ray_inputs_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
 
         let image_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
@@ -627,34 +613,6 @@ impl InternalApp {
             raw,
         );
 
-        let barrier = vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
-        let barriers = [barrier];
-        let dep_wait_all: vk::DependencyInfo<'_> = vk::DependencyInfo::default().memory_barriers(&barriers);
-
-        // generate rays, store data in `ray_inputs` buffer
-        self.device.cmd_dispatch(cmd, width_group_size, height_group_size, 1);
-
-        // execute the ray trace pipeline now
-        self.device.cmd_pipeline_barrier2(cmd, &dep_wait_all);
-        rays::trace_rays(&self.device, cmd, all_descriptor_sets_for_frame[1], &self.ray_trace_buffers, &self.ray_trace_pipeline, &self.svo, size.x * size.y, self.movement.position);
-        self.device.cmd_pipeline_barrier2(cmd, &dep_wait_all);
-
-        // execute the apply pipeline that fetches result from the ray trace pipeline
-        self.device.cmd_bind_descriptor_sets(
-            cmd,
-            vk::PipelineBindPoint::COMPUTE,
-            self.render_compute_pipeline.entry_points[1].pipeline_layout,
-            0,
-            &[render_descriptor_set],
-            &[],
-        );
-        self.device.cmd_bind_pipeline(
-            cmd,
-            vk::PipelineBindPoint::COMPUTE,
-            self.render_compute_pipeline.entry_points[1].pipeline,
-        );
         self.device.cmd_dispatch(cmd, width_group_size, height_group_size, 1);
 
         let src_shader_write_to_transfer_src = vk::ImageMemoryBarrier2::default()
@@ -789,8 +747,6 @@ impl InternalApp {
         self.generate_voxel_compute_pipeline.destroy(&self.device);
         log::info!("destroyed generate voxel compute pipeline");
 
-        self.ray_trace_pipeline.destroy(&self.device);
-        log::info!("destroyed ray trace compute pipeline");
 
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");

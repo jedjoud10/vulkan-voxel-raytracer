@@ -45,13 +45,14 @@ pub unsafe fn create_ray_trace_buffers(
 
     log::info!("create ray trace buffers");
     RayTraceBuffers {
-        ray_inputs: create_buffer(device, allocator, ray_input_struct_size * MAX_RAYS, binder, "ray inputs buffer"),
-        ray_outputs: create_buffer(device, allocator, ray_output_struct_size * MAX_RAYS, binder, "ray output buffer"),
-        ray_counts: create_buffer(device, allocator, size_of::<u32>(), binder, "ray count buffer"),
-        dispatch_size_command: create_buffer(device, allocator, size_of::<Vec3::<u32>>(), binder, "ray dispatch size buffer"),
+        ray_inputs: create_buffer(device, allocator, ray_input_struct_size * MAX_RAYS, binder, "ray inputs buffer", vk::BufferUsageFlags::STORAGE_BUFFER),
+        ray_outputs: create_buffer(device, allocator, ray_output_struct_size * MAX_RAYS, binder, "ray output buffer", vk::BufferUsageFlags::STORAGE_BUFFER),
+        ray_counts: create_buffer(device, allocator, size_of::<u32>(), binder, "ray count buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST),
+        dispatch_size_command: create_buffer(device, allocator, size_of::<Vec3::<u32>>(), binder, "ray dispatch size buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER),
     }
 }
 
+/*
 pub type RayTracePipeline = MultiComputePipeline<2>;
 
 pub unsafe fn create_ray_trace_compute_pipeline(
@@ -204,3 +205,4 @@ pub unsafe fn trace_rays(
     let dispatch_size = ray_count.div_ceil(64) as u32;
     device.cmd_dispatch(cmd, dispatch_size, 1, 1);
 }
+*/

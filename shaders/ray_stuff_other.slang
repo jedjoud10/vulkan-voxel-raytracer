@@ -21,7 +21,11 @@ struct SparseVoxelOctree {
 
 static const int DEPTH = 5;
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
-DdaTraversalOutput dda_trace_recurse<let K : int>(
+
+// TODO: OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE
+// 1. optimize occupancy, we still have buffer latency left to hide
+// 2. optimize raw speed, it is still relatively slow on my HW
+DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
     uint32_t base_index,
     uint64_t raw,
     float3 ray_dir,
@@ -29,70 +33,74 @@ DdaTraversalOutput dda_trace_recurse<let K : int>(
     half3 inv_dir,
     int8_t3 dir_sign,
     float distance,
-    uint16_t3 bounds_min,
-    uint16_t3 bounds_max,
     SparseVoxelOctree svo,
+    int16_t3 parent_world_space_origin,
+    out int iter,
 ) {
+    // quick check
+    if (any(ray_pos < 0 | ray_pos >= TOTAL_SIZE)) {
+        return DdaTraversalOutput(false);
+    }
+
+    // fail safe, should never happen
     if (raw == 0) {
         return DdaTraversalOutput(false);
     }
 
     int voxel_size = 1 << max(K*2, 0);
-    uint16_t3 min_bounds_local_space = bounds_min / voxel_size;
-    uint16_t3 max_bounds_local_space = bounds_max / voxel_size;
 
-    float3 modified_ray_pos = (ray_pos + ray_dir * (distance + 0.01)) / voxel_size;
+    // do everything in world space first, and then we convert to local space
+    iter++;
+    float3 modified_ray_pos = ((ray_pos + ray_dir * distance) / (float)voxel_size);
     int16_t3 floored_pos = (int16_t3)floor(modified_ray_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
     bool3 eqs = 0;
-
+    
+    // FLOORED POS IS ALWAYS IN THE RANGE [0..4)
+    // idea from https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
+    // it works very nicely!
+    floored_pos -= parent_world_space_origin / voxel_size;
+    //floored_pos = clamp(floored_pos, 0, 3);
+    //floored_pos = floored_pos % 4;
 
     [loop]
     for (uint8_t i = 0; i < 12; i++) {
-        if (any(floored_pos < 0 | floored_pos >= (TOTAL_SIZE / voxel_size))) {
+        // exit early if we leave the space
+        // HACK: this is a looser bound to accomodate for floating point shit fard
+        if (any(floored_pos < -1 | floored_pos > 4)) {
             return DdaTraversalOutput(false);
         }
 
-        bool oob = any((floored_pos) < (min_bounds_local_space) | (int3)(floored_pos) > ((int3)max_bounds_local_space - 1));
-        bool oob_loose = any((int3)(floored_pos) < ((int3)min_bounds_local_space-1) | floored_pos > (max_bounds_local_space));
-        
-        
-        if (oob_loose) {
-            return DdaTraversalOutput(false);
-        }
-        
-        uint8_t3 local = (uint16_t3)floored_pos % (uint16_t3)4;
+        // we know that floored pos is the local coordinate directly anyways
+        uint8_t3 local = (uint8_t3)floored_pos % 4;
         uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
-
+        
+        bool oob = any((floored_pos) < 0 | floored_pos > 3);
         if (bit_index < 64 && ((raw >> bit_index) & 1) == 1 && !oob) {  
-            float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) + 0.001;
-            uint8_t face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-            if (K > 0) {
+            // still need an offset though, for the normals :(((
+            float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) - 0.01;
+            if (K > END && base_index != 0xFFFFFFFF) {
                 // calculate child offset index, which is NOT the same as the bit index
                 // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
                 // create a mask for the first `n` bits
-                uint64_t mask = (1 << bit_index) - 1;
+                uint64_t mask = ((uint64_t)1 << bit_index) - 1;
                 uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
+
                 uint32_t actual_child_index = base_index + child_offset_index;
-
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
-                
-                if (new_base_index != 0xFFFF) {
-                    uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
 
-                    uint16_t3 next_min_bounds_world_space = (uint16_t3)floored_pos * voxel_size;
-                    uint16_t3 next_max_bounds_world_space = (uint16_t3)floored_pos * voxel_size + voxel_size;
+                uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
 
 
-                    var result = dda_trace_recurse<K - 1>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, next_min_bounds_world_space, next_max_bounds_world_space, svo);
+                if (new_raw != 0) {
+                    var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, svo, parent_world_space_origin + floored_pos * voxel_size, iter);
                     if (result.hit) {
                         return result;
                     }
-                } else {
-                    return DdaTraversalOutput(true, ray_pos + ray_dir * (distance + distance_offset), (uint3)floored_pos, face);
                 }
             } else {
-                return DdaTraversalOutput(true, ray_pos + ray_dir * (distance + distance_offset), (uint3)floored_pos, face);
+                uint8_t face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+                return DdaTraversalOutput(true, ray_pos + ray_dir * (distance + distance_offset), (uint3)parent_world_space_origin + (uint3)floored_pos * voxel_size, face);
             }
         }
 
@@ -110,8 +118,8 @@ bool ray_box_intersection(
     half3 inv_dir,
     int8_t3 dir_sign,
     float3 ray_pos,
-    int16_t3 aabb_min,
-    int16_t3 aabb_max,
+    float3 aabb_min,
+    float3 aabb_max,
     out float _tmin,
 ) {
     float tmin = 0.0;
@@ -135,8 +143,8 @@ bool ray_box_intersection(
     half3 inv_dir,
     int8_t3 dir_sign,
     float3 ray_pos,
-    int16_t3 aabb_min,
-    int16_t3 aabb_max,
+    float3 aabb_min,
+    float3 aabb_max,
 ) {
     float tmin = 0.0;
     float tmax = 999999;
@@ -150,7 +158,7 @@ bool ray_box_intersection(
     tmin = max3(k1.x, k1.y, k1.z);
     tmax = min3(k2.x, k2.y, k2.z);
 
-    return max(tmin, 0) < tmax;
+    return max(tmin, 0) <= tmax;
 }
 
 // FIXME: for some reason firstbitlow does not support uint64_t... even though it does support them... idk
@@ -169,62 +177,6 @@ uint8_t fixedfirstbitlow(uint64_t value) {
         count += 32;
 
     return uint8_t(count);
-}
-
-void aabb_test_recurse<let K : int>(
-    uint32_t base_index,
-    uint64_t raw,
-    float3 ray_dir,
-    float3 ray_pos,
-    half3 inv_dir,
-    int8_t3 dir_sign,
-    uint16_t3 block_origin,
-    float block_expand,
-    SparseVoxelOctree svo,
-    inout float distance,
-) {
-    if (raw == 0) {
-        return;
-    }
-
-    int voxel_size = 1 << max(K*2, 0);
-
-    uint64_t remaining = raw;
-
-    while (remaining != 0) {
-        uint8_t bit_index = fixedfirstbitlow(remaining);
-        remaining &= (remaining - 1);
-
-        uint8_t z = bit_index % 4;
-        uint8_t y = (bit_index / 4) % 4;
-        uint8_t x = (bit_index / 16) % 4; 
-
-        uint16_t3 world_space_bounds_min = block_origin + (uint16_t3)(uint16_t3(x, y, z) * (uint16_t)voxel_size);
-        uint16_t3 world_space_bounds_max = world_space_bounds_min + (uint16_t3)((uint16_t)voxel_size);
-
-        uint64_t mask = (1 << bit_index) - 1;
-        uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
-        uint32_t actual_child_index = base_index + child_offset_index;
-        uint32_t new_base_index = svo.indices_buffer[actual_child_index];
-
-        uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-
-        float tmin = 0;
-        bool hit = ray_box_intersection(inv_dir, dir_sign, ray_pos, world_space_bounds_min - int3(block_expand), world_space_bounds_max + int3(block_expand), tmin);
-        
-        if (new_base_index != 0xFFFF) {
-            if (hit) {
-                if (K > 1) {
-                    aabb_test_recurse<K - 1>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, world_space_bounds_min, block_expand, svo, distance);                    
-                } else {
-                    distance = min(distance, max(tmin, 0));
-                }
-            
-            }
-        } else if(hit) {
-            distance = min(distance, max(tmin, 0));
-        }
-    }
 }
 
 // flip axii of 64-bit brick mask according to dir sign
@@ -284,7 +236,7 @@ uint8_t fetch_bit_index_unflipped(uint8_t bit_index, int8_t3 dir_sign) {
 // this is faster than the "distance" based checks since this does not need to sort children to avoid "ghost see through", since we only care about "any hit"
 // surprisingly runs at full occupancy!!
 // still slower than the DDA one though... which is weird because the DDA one has lower occupancy and much higher buffer latency...
-bool any_hit_aabb_test_recurse<let K : int>(
+bool any_hit_aabb_test_recurse<let K : int, let END : int>(
     uint32_t base_index,
     uint64_t raw,
     float3 ray_dir,
@@ -292,7 +244,9 @@ bool any_hit_aabb_test_recurse<let K : int>(
     half3 inv_dir,
     int8_t3 dir_sign,
     uint16_t3 block_origin,
+    int expand,
     SparseVoxelOctree svo,
+    out float tmin,
 ) {
     int voxel_size = 1 << max(K*2, 0);
 
@@ -320,12 +274,14 @@ bool any_hit_aabb_test_recurse<let K : int>(
         uint32_t actual_child_index = base_index + child_offset_index;
 
         // check node vs ray
-        if (raw != 0 && ray_box_intersection(inv_dir, dir_sign, ray_pos, world_space_bounds_min, world_space_bounds_max)) {
+        float t = 99999;
+        if (raw != 0 && ray_box_intersection(inv_dir, dir_sign, ray_pos, (float3)world_space_bounds_min - expand, (float3)world_space_bounds_max + expand, t)) {
+            tmin = 10;
             uint32_t new_base_index = svo.indices_buffer[actual_child_index];
             if (new_base_index != 0xFFFF) {
-                if (K > 0) {
+                if (K > END) {
                     uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-                    if (any_hit_aabb_test_recurse<K - 1>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, world_space_bounds_min, svo)) {
+                    if (any_hit_aabb_test_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, world_space_bounds_min, expand, svo, tmin)) {
                         return true;
                     }     
                 } else {
@@ -340,23 +296,38 @@ bool any_hit_aabb_test_recurse<let K : int>(
     return false;
 }
 
-
-bool any_hit_trace1(
+DdaTraversalOutput trace_shi(
     float3 ray_pos,
     half3 ray_dir,
     SparseVoxelOctree svo,
+    out int iter,
 ) {
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return any_hit_aabb_test_recurse<DEPTH-1>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0, svo);
+    return dda_trace_recurse<DEPTH - 1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, iter);
 }
 
-bool any_hit_trace(
+bool any_hit_trace_fine(
     float3 ray_pos,
     half3 ray_dir,
     SparseVoxelOctree svo,
 ) {
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_trace_recurse<DEPTH-1>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 99999, svo).hit;
+    float tmin = 0;
+    return any_hit_aabb_test_recurse<DEPTH-1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0, 0, svo, tmin);
+}
+
+bool any_hit_trace_coarse(
+    float3 ray_pos,
+    half3 ray_dir,
+    SparseVoxelOctree svo,
+    out float tmin,
+) {
+    float3 avg_ray_dir = WaveActiveSum(ray_dir.xyz) / 64.0;
+    half3 avg_inv_dir = (half3)1.0 / abs(avg_ray_dir);
+    int8_t3 avg_dir_sign = (int8_t3)sign(avg_ray_dir);
+
+    return any_hit_aabb_test_recurse<DEPTH-1, 2>(1, svo.bitmasks_buffer[0], avg_ray_dir, ray_pos, avg_inv_dir, avg_dir_sign, 0, 10, svo, tmin);
+    //return dda_trace_recurse<DEPTH-1, 2>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 99999, svo).hit;
 }
