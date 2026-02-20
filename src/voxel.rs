@@ -2,6 +2,7 @@ use std::{collections::VecDeque, ffi::{CStr, CString}, str::FromStr};
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
+use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 
@@ -115,8 +116,8 @@ pub unsafe fn create_sparse_voxel_octree(
     // TODO: does this make sense? no... but... it works...
     let max_svo_element_size = 4096 * 64 * 64;
 
-    let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER);
-    let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER);
+    let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+    let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
 
     SparseVoxelOctree { bitmask_buffer, index_buffer }
 }
@@ -481,11 +482,17 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
         }
     }
 
-    for x in 0..8 {
-        //let index = pseudo_random((x as u32) ^ 0x03f23 ^ base ^ seed) % 64;
-        let index = x as u32;
-        children[index as usize] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, index ^ (x as u32))));
+    let generated_children = (0..30).into_par_iter().map(|i| {
+        let dst_index = (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 64);
+        let child = Box::new(test_sparse_voxel_octree_recurse(base - 1, dst_index));
+        (dst_index, child)
+    }).collect::<Vec<_>>();
+
+    for (dst_index, child) in generated_children {
+        children[dst_index as usize] = Some(child);
     }
+
+
     
     
     Node {

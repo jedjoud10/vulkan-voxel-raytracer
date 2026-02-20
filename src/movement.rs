@@ -1,6 +1,14 @@
 use crate::input::{Axis, Input, MouseAxis};
+use serde::{Deserialize, Serialize};
 use vek::Clamp;
 use winit::keyboard::KeyCode;
+
+
+#[derive(Serialize, Deserialize)]
+pub struct Snapshot {
+    pub position: vek::Vec3<f32>,
+    pub rotation: vek::Quaternion<f32>,
+}
 
 #[derive(Default)]
 pub struct Movement {
@@ -8,23 +16,37 @@ pub struct Movement {
     pub rotation: vek::Quaternion<f32>,
     pub proj_matrix: vek::Mat4<f32>,
     pub view_matrix: vek::Mat4<f32>,
-
-    pub summed_mouse: vek::Vec2<f32>,
-    pub local_velocity: vek::Vec2<f32>,
-    pub velocity: vek::Vec3<f32>,
-    pub boost: f32,
+    
+    summed_mouse: vek::Vec2<f32>,
+    local_velocity: vek::Vec2<f32>,
+    velocity: vek::Vec3<f32>,
+    boost: f32,
+    fixed_mode_snapshot_index: Option<usize>,
+    snapshots: Vec<Snapshot>,
 }
 
 impl Movement {
     pub fn new() -> Self {
+        let snapshots: Vec<Snapshot> = serde_json::from_str(include_str!("snapshots.json")).unwrap();
+
         Self {
-            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32 - 80f32, 30f32, crate::voxel::SIZE as f32 / 2f32 - 80f32),
+            position: vek::Vec3::new(40.5f32, 30f32, 40.5f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
+            fixed_mode_snapshot_index: None,
+            snapshots: snapshots,
             //position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 60f32, crate::voxel::SIZE as f32 / 2f32),
             ..Default::default()
         }
-    }
 
+        /*
+        Self {
+            position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32 - 80f32, 30f32, crate::voxel::SIZE as f32 / 2f32 - 80f32),
+            rotation : vek::Quaternion::identity(),
+            //position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 60f32, crate::voxel::SIZE as f32 / 2f32),
+            ..Default::default()
+        }
+        */
+    }
     pub fn update(&mut self, input: &Input, ratio: f32, delta: f32) {
         self.local_velocity = vek::Vec2::<f32>::zero();
         let speed = if input.get_button(KeyCode::ShiftLeft).held() {
@@ -59,7 +81,10 @@ impl Movement {
             summed_mouse_target,
             (40f32 * delta).clamped01(),
         );
-        self.rotation = vek::Quaternion::rotation_y(self.summed_mouse.x) * vek::Quaternion::rotation_x(self.summed_mouse.y);
+
+        if self.fixed_mode_snapshot_index.is_none() {
+            self.rotation = vek::Quaternion::rotation_y(self.summed_mouse.x) * vek::Quaternion::rotation_x(self.summed_mouse.y);
+        }
         
 
         let uhh = 1f32 / ratio;
@@ -80,7 +105,38 @@ impl Movement {
             (40f32 * delta).clamped01(),
         );
 
-        self.position += self.velocity * delta;
+        if self.fixed_mode_snapshot_index.is_none() {
+            self.position += self.velocity * delta;
+        }
+
+        // take a snapshot of the movement (position + rotation) and print to console
+        if input.get_button(KeyCode::KeyU).pressed() {
+            let snap = Snapshot {
+                position: self.position,
+                rotation: self.rotation,
+            };
+
+            let str = serde_json::to_string_pretty(&snap).unwrap();
+            println!("{str}");
+        }
+
+        // toggle fixed mode
+        if input.get_button(KeyCode::KeyI).pressed() {
+            self.fixed_mode_snapshot_index = match self.fixed_mode_snapshot_index {
+                Some(_) => None,
+                None => Some(0),
+            };
+        }
+
+        // iterate over snapshots
+        if let Some(ref mut idx) = self.fixed_mode_snapshot_index && input.get_button(KeyCode::KeyO).pressed() {
+            if self.snapshots.len() > 0 {
+                *idx += 1;
+                *idx = *idx % self.snapshots.len();
+                self.position = self.snapshots[*idx].position;
+                self.rotation = self.snapshots[*idx].rotation;
+            }
+        }
     }
 }
 

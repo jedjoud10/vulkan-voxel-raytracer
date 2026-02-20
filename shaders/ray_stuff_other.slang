@@ -19,6 +19,11 @@ struct SparseVoxelOctree {
     StructuredBuffer<uint64_t> bitmasks_buffer;
 }
 
+struct Statistics {
+    int iterations;
+    int buffer_fetches;
+}
+
 static const int DEPTH = 5;
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
@@ -35,22 +40,16 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
     float distance,
     SparseVoxelOctree svo,
     int16_t3 parent_world_space_origin,
-    out int iter,
+    inout Statistics stats,
 ) {
     // quick check
     if (any(ray_pos < 0 | ray_pos >= TOTAL_SIZE)) {
         return DdaTraversalOutput(false);
     }
 
-    // fail safe, should never happen
-    if (raw == 0) {
-        return DdaTraversalOutput(false);
-    }
-
     int voxel_size = 1 << max(K*2, 0);
 
     // do everything in world space first, and then we convert to local space
-    iter++;
     float3 modified_ray_pos = ((ray_pos + ray_dir * distance) / (float)voxel_size);
     int16_t3 floored_pos = (int16_t3)floor(modified_ray_pos);
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
@@ -60,7 +59,6 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
     // idea from https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
     // it works very nicely!
     floored_pos -= parent_world_space_origin / voxel_size;
-    //floored_pos = clamp(floored_pos, 0, 3);
     //floored_pos = floored_pos % 4;
 
     [loop]
@@ -76,9 +74,13 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
         uint8_t bit_index = local.z + local.y * 4 + local.x * 4 * 4;
         
         bool oob = any((floored_pos) < 0 | floored_pos > 3);
+
+        [branch]
         if (bit_index < 64 && ((raw >> bit_index) & 1) == 1 && !oob) {  
             // still need an offset though, for the normals :(((
-            float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) - 0.01;
+            float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size) + 0.01;
+
+            [branch]
             if (K > END && base_index != 0xFFFFFFFF) {
                 // calculate child offset index, which is NOT the same as the bit index
                 // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
@@ -88,15 +90,12 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
 
                 uint32_t actual_child_index = base_index + child_offset_index;
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
-
                 uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
+                stats.buffer_fetches += 1;
 
-
-                if (new_raw != 0) {
-                    var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, svo, parent_world_space_origin + floored_pos * voxel_size, iter);
-                    if (result.hit) {
-                        return result;
-                    }
+                var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance + distance_offset, svo, parent_world_space_origin + floored_pos * voxel_size, stats);
+                if (result.hit) {
+                    return result;
                 }
             } else {
                 uint8_t face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
@@ -108,6 +107,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
         eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
         side_dist += select(eqs, inv_dir, 0.0);
         floored_pos += select(eqs, (int16_t3)dir_sign, int16_t3(0));
+        stats.iterations += 1;
     }
 
     return DdaTraversalOutput(false);
@@ -244,7 +244,6 @@ bool any_hit_aabb_test_recurse<let K : int, let END : int>(
     half3 inv_dir,
     int8_t3 dir_sign,
     uint16_t3 block_origin,
-    int expand,
     SparseVoxelOctree svo,
     out float tmin,
 ) {
@@ -275,13 +274,13 @@ bool any_hit_aabb_test_recurse<let K : int, let END : int>(
 
         // check node vs ray
         float t = 99999;
-        if (raw != 0 && ray_box_intersection(inv_dir, dir_sign, ray_pos, (float3)world_space_bounds_min - expand, (float3)world_space_bounds_max + expand, t)) {
+        if (raw != 0 && ray_box_intersection(inv_dir, dir_sign, ray_pos, (float3)world_space_bounds_min, (float3)world_space_bounds_max, t)) {
             tmin = 10;
             uint32_t new_base_index = svo.indices_buffer[actual_child_index];
             if (new_base_index != 0xFFFF) {
                 if (K > END) {
                     uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-                    if (any_hit_aabb_test_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, world_space_bounds_min, expand, svo, tmin)) {
+                    if (any_hit_aabb_test_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, world_space_bounds_min, svo, tmin)) {
                         return true;
                     }     
                 } else {
@@ -300,7 +299,7 @@ DdaTraversalOutput trace_shi(
     float3 ray_pos,
     half3 ray_dir,
     SparseVoxelOctree svo,
-    out int iter,
+    out Statistics iter,
 ) {
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
@@ -311,11 +310,13 @@ bool any_hit_trace_fine(
     float3 ray_pos,
     half3 ray_dir,
     SparseVoxelOctree svo,
+    out Statistics stats,
 ) {
+    stats = Statistics();
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     float tmin = 0;
-    return any_hit_aabb_test_recurse<DEPTH-1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0, 0, svo, tmin);
+    return any_hit_aabb_test_recurse<DEPTH-1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0, svo, tmin);
 }
 
 bool any_hit_trace_coarse(
@@ -328,6 +329,6 @@ bool any_hit_trace_coarse(
     half3 avg_inv_dir = (half3)1.0 / abs(avg_ray_dir);
     int8_t3 avg_dir_sign = (int8_t3)sign(avg_ray_dir);
 
-    return any_hit_aabb_test_recurse<DEPTH-1, 2>(1, svo.bitmasks_buffer[0], avg_ray_dir, ray_pos, avg_inv_dir, avg_dir_sign, 0, 10, svo, tmin);
+    return any_hit_aabb_test_recurse<DEPTH-1, 2>(1, svo.bitmasks_buffer[0], avg_ray_dir, ray_pos, avg_inv_dir, avg_dir_sign, 0, svo, tmin);
     //return dda_trace_recurse<DEPTH-1, 2>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, 0, 99999, svo).hit;
 }

@@ -590,8 +590,9 @@ impl InternalApp {
         let size = vek::Vec2::<u32>::new(size.width, size.height)
             .map(|val| val / swapchain::SCALING_FACTOR);
 
-        let width_group_size = (size.x as f32 / 8f32).ceil() as u32;
-        let height_group_size = (size.y as f32 / 8f32).ceil() as u32;
+        let group_size = 8 as f32;
+        let width_group_size = (size.x as f32 / group_size).ceil() as u32;
+        let height_group_size = (size.y as f32 / group_size).ceil() as u32;
         let size_f32 = size.map(|x| x as f32);
 
         let push_constants = pipeline::PushConstants {
