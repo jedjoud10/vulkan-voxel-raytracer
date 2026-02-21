@@ -32,7 +32,7 @@ impl Movement {
 
         Self {
             fov: 80f32,
-            position: vek::Vec3::new(40.5f32, 30f32, 40.5f32),
+            position: vek::Vec3::new(40.5f32, 80f32, 40.5f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
             fixed_mode_snapshot_index: None,
             snapshots: snapshots,

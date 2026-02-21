@@ -25,7 +25,7 @@ struct Statistics {
     int buffer_fetches;
 }
 
-static const int DEPTH = 7;
+static const int DEPTH = 6;
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
 // TODO: OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE
@@ -202,7 +202,8 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
             // I dislike this because it's technically "cheating" but I could not find any other way to decrease bandwidth pressure (we have too many buffer reads! this is killing perf!)
             float distance_to_surface = distance + distance_offset;
             float distance_to_cube = length(ray_pos - (origin + voxel_size / 2));
-            bool lod_check = pow(distance_to_cube, 0.40) < (pow(max(voxel_size, 8), 0.7)) || (K > 5);
+            bool lod_check = pow(distance_to_cube, 0.30) < (max(voxel_size, 4)) || (K > 5);
+            lod_check = true; // disables it...
 
             [branch]
             if (K > END && base_index != 0xFFFFFFFF && lod_check) {
@@ -211,6 +212,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 // create a mask for the first `n` bits
                 uint64_t mask = ((uint64_t)1 << bit_index) - 1;
                 uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
+
 
                 uint32_t actual_child_index = base_index + child_offset_index;
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
@@ -369,7 +371,7 @@ bool any_hit_aabb_test_recurse<let K : int, let END : int>(
     uint16_t3 block_origin,
     SparseVoxelOctree svo,
     out float tmin,
-    inout bool finished,
+    inout Statistics stats,
 ) {
     int voxel_size = 1 << max(K*2, 0);
 
@@ -377,6 +379,8 @@ bool any_hit_aabb_test_recurse<let K : int, let END : int>(
     // to allow us to iterate through the bits from NEAR to FAR along the ray
     // this will still iterate over chunks that we don't need to iterate over, but distances are exact at least!
     uint64_t remaining = flip_according_dir_sign(raw, dir_sign);    
+
+    [loop]
     while (remaining != 0) {
         // must undo our bit shit, we need the actual bit index inside the original `raw` value
         uint8_t bit_index = fetch_bit_index_unflipped(fixedfirstbitlow(remaining), dir_sign);
@@ -391,36 +395,31 @@ bool any_hit_aabb_test_recurse<let K : int, let END : int>(
         uint16_t3 world_space_bounds_min = block_origin + (uint16_t3)(uint16_t3(x, y, z) * (uint16_t)voxel_size);
         uint16_t3 world_space_bounds_max = world_space_bounds_min + (uint16_t3)((uint16_t)voxel_size);
 
-        // calculate the packed child offset. it is the sum of the previous high bits before `bit_index` in `raw` 
-        uint64_t mask = (1 << bit_index) - 1;
-        uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
-        uint32_t actual_child_index = base_index + child_offset_index;
-
         // check node vs ray
         float t = 99999;
-        if (raw != 0 && ray_box_intersection(inv_dir, dir_sign, ray_pos, (float3)world_space_bounds_min, (float3)world_space_bounds_max, t)) {
-            tmin = 10;
-            uint32_t new_base_index = svo.indices_buffer[actual_child_index];
-            if (new_base_index != 0xFFFF) {
-                if (K > END) {
-                    uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-                    if (any_hit_aabb_test_recurse<K - 1, END>(new_base_index, new_raw, ray_pos, inv_dir, dir_sign, world_space_bounds_min, svo, tmin, finished)) {
-                        finished = true;
-                        return true;
-                    }     
-                } else {
-                    finished = true;
+
+        [branch]
+        if (ray_box_intersection(inv_dir, dir_sign, ray_pos, (float3)world_space_bounds_min, (float3)world_space_bounds_max, t)) {
+            [branch]
+            if (K > END && base_index != 0xFFFFFFFF) {
+                // calculate the packed child offset. it is the sum of the previous high bits before `bit_index` in `raw` 
+                uint64_t mask = ((uint64_t)1 << bit_index) - 1;
+                uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
+                uint32_t actual_child_index = base_index + child_offset_index;
+
+                uint32_t new_base_index = svo.indices_buffer[actual_child_index];
+                uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
+                stats.buffer_fetches++;
+
+                if (any_hit_aabb_test_recurse<K - 1, END>(new_base_index, new_raw, ray_pos, inv_dir, dir_sign, world_space_bounds_min, svo, tmin, stats)) {
                     return true;
-                }
+                }  
             } else {
-                finished = true;
                 return true;
             }
         }
-    }
 
-    if (K == 0) {
-        finished = false;
+        stats.iterations++;
     }
 
     return false;
@@ -524,8 +523,7 @@ bool any_hit_trace_fine(
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     float tmin = 0;
-    bool finished = false;
-    return any_hit_aabb_test_recurse<DEPTH-1, 0>(1, svo.bitmasks_buffer[0], ray_pos, inv_dir, dir_sign, 0, svo, tmin, finished);
+    return any_hit_aabb_test_recurse<DEPTH-1, 0>(1, svo.bitmasks_buffer[0], ray_pos, inv_dir, dir_sign, 0, svo, tmin, stats);
 }
 
 /*

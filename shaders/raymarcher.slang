@@ -35,14 +35,13 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
     SparseVoxelOctree svo = SparseVoxelOctree(svo_indices_buffer, svo_bitmasks_buffer);
 
-    /*
-    bool hit = any_hit_trace_fine(ray_pos, ray_dir, svo);
-    */
-
-
+    
+    
+    
     Statistics stats = Statistics(0, 0);
+    //bool hit = any_hit_trace_fine(ray_pos, ray_dir, svo);
     //uint clock = getRealtimeClock().x;
-    bool b = trace_shi(ray_pos, ray_dir, svo, stats).hit;
+    var b = trace_shi(ray_pos, ray_dir, svo, stats);
     /*
     //bool b = any_hit_trace_fine(ray_pos, ray_dir, svo, stats);
     uint clock2 = getRealtimeClock().x;
@@ -54,10 +53,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     */
 
     //output[id.xy] = float4(hash33(stats.buffer_fetches), 0);
-    output[id.xy] = float4(stats.iterations / 256.0);
-    //output[id.xy] = float4(b ? 1 : 0);
+    //output[id.xy] = float4(stats.iterations / 256.0);
+    output[id.xy] = float4((b.block_pos % 4) / 4.0, 0);
     //output[id.xy] = float4(iter / 64.0);
-    //output[id.xy] = float4(ray.hit ? 1 : 0);
+    //output[id.xy] = float4(hit ? 1 : 0);
     /*
     GroupMemoryBarrierWithWaveSync();
     AllMemoryBarrierWithGroupSync();

@@ -121,9 +121,11 @@ pub unsafe fn write_to_buffer(
 
     let staging_buffer_opt = if bytes.len() < BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD {
         // inline (command buffer write) impl
+        log::info!("writing {} bytes to buffer, using inline path", bytes.len());
         device.cmd_update_buffer(cmd, dst_buffer, 0, bytes);
         None
     } else {
+        log::info!("writing {} bytes to buffer, using staging buffer path", bytes.len());
         // staging buffer impl
         let staging_buffer_create_info = vk::BufferCreateInfo::default()
             .flags(vk::BufferCreateFlags::empty())

@@ -461,40 +461,74 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 
     let mut children = [const { None }; 64];
 
+    // small chance to exit early
+    /*
+    if (pseudo_random(0xA23 ^ base ^ seed) % 10) < 2 {
+        children.fill_with(|| Some(Box::new(test_sparse_voxel_octree_recurse(0, 0))));
+        return Node {
+            children: Some(Box::new(children)),
+            bottom: true,
+        }
+    }
+    */
+
+    let mut recursive= Vec::<u32>::new();
+
     for x in  0..4 {
         for y in 0..4 {
             for z in 0..4 {
                 let vec = vek::Vec3::new(x,y,z);
                 let i = x + y * 4 + z * 4 * 4;
 
+                // base plate
+                if y == 0 {
+                    children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                }
+
+                if y == 1 {
+                    if (x == 0 || x == 3) || (z == 0 || z == 3) {
+                        // inductive case
+                        recursive.push(i as u32);
+                    } else {
+                        // mid plate
+                        children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                    }
+                }
+
+                if y == 2 {
+                    if (x == 1 || x == 2) && (z == 1 || z == 2) {
+                        // inductive case
+                        recursive.push(i as u32);
+                    }
+                }
+
+
+
                 /*
-                if (vec.cmple(&vek::Vec3::broadcast(2)).reduce_and() && vec.cmpge(&vek::Vec3::broadcast(0)).reduce_and()) {
-                    children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
+                if y == (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 4) && base == 1 {
+                    recursive.push(i);
                 }
                 */
 
                 /*
-                if ((pseudo_random(0x03f23 ^ base ^ seed) % 2) == 0) {
-                    children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, i as u32)));
+                if (vec.cmpge(&vek::Vec3::broadcast(1)).reduce_and() && vec.cmple(&vek::Vec3::broadcast(2)).reduce_and()) {
+                    recursive.push(i);
                 }
                 */
             }
         }
     }
 
-    let count = (pseudo_random(0x569A23 ^ base ^ seed) % 40).clamp(7, 12);
-    let generated_children = (0..count).into_par_iter().map(|i| {
+    let generated_children = recursive.into_par_iter().map(|i| {
         let dst_index = (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 64);
         let child = Box::new(test_sparse_voxel_octree_recurse(base - 1, dst_index));
-        (dst_index, child)
+        (i, child)
     }).collect::<Vec<_>>();
 
     for (dst_index, child) in generated_children {
         children[dst_index as usize] = Some(child);
     }
-
-
-    
+    //children[0] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, 123)));
     
     Node {
         children: Some(Box::new(children)),
@@ -503,7 +537,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    return test_sparse_voxel_octree_recurse(7, 0x0323f);
+    return test_sparse_voxel_octree_recurse(6, 0x0323f);
 
     let mut children = [const { None }; 64];
 
@@ -560,7 +594,7 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
             assert_eq!(self_index, parent + self_packed_child_offset);
         }
 
-        let bitmask = node.children.as_ref().map(|children| children.iter()
+        let mut bitmask = node.children.as_ref().map(|children| children.iter()
             .enumerate()
             .filter_map(|(i, x)| x.as_ref().map(|_| i))
             .fold(0u64, |prev, i| ((1u64 << i) as u64) | prev)
@@ -570,6 +604,10 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
 
         if node.bottom {
             base_child_index = u32::MAX;
+
+            if node.children.is_none() {
+                bitmask = u64::MAX;
+            }
         } else {
             non_leaf_nodes_visited += 1;
             fullness_total += bitmask.count_ones() as f32 / 64f32;
