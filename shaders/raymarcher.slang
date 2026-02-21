@@ -41,17 +41,21 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
 
     Statistics stats = Statistics(0, 0);
-    uint clock = getRealtimeClock().x;
-    //DdaTraversalOutput ray = trace_shi(ray_pos, ray_dir, svo, stats);
-    bool b = any_hit_trace_fine(ray_pos, ray_dir, svo, stats);
+    //uint clock = getRealtimeClock().x;
+    bool b = trace_shi(ray_pos, ray_dir, svo, stats).hit;
+    /*
+    //bool b = any_hit_trace_fine(ray_pos, ray_dir, svo, stats);
     uint clock2 = getRealtimeClock().x;
     float elapsed = (clock2 - clock) / 4096.0;
 
     // if this is a high value, it means that, in the wave, a bunch of threads exited / are doing jack shit whilst other are doing work
     // if this is a lower value, it means that most threads are doing the same amount of work
     float some_number = (WaveActiveMax(stats.iterations) - stats.iterations) / 256.0;
+    */
 
-    output[id.xy] = float4(b ? 1 : 0);
+    //output[id.xy] = float4(hash33(stats.buffer_fetches), 0);
+    output[id.xy] = float4(stats.iterations / 256.0);
+    //output[id.xy] = float4(b ? 1 : 0);
     //output[id.xy] = float4(iter / 64.0);
     //output[id.xy] = float4(ray.hit ? 1 : 0);
     /*

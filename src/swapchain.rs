@@ -109,7 +109,7 @@ pub unsafe fn create_temporary_target_render_image(
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: "Render Texture Image Allocation",
             requirements: requirements,
-            linear: true,
+            linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedImage(rt_image),
             location: gpu_allocator::MemoryLocation::GpuOnly,
         })

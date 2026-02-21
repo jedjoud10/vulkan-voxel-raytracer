@@ -5,6 +5,7 @@
 
 mod assets;
 mod debug;
+mod query;
 use assets::convert;
 use assets::damn;
 mod device;
@@ -53,6 +54,7 @@ struct InternalApp {
     device: ash::Device,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
+    
     debug: Option<(
         ash::ext::debug_utils::Instance,
         vk::DebugUtilsMessengerEXT
@@ -76,7 +78,10 @@ struct InternalApp {
     generate_voxel_compute_pipeline: VoxelGeneratePipeline,
     tick_voxel_compute_pipeline: VoxelTickPipeline,
 
-    ray_trace_buffers: RayTraceBuffers,
+    //ray_trace_buffers: RayTraceBuffers,
+
+    query_pool: vk::QueryPool,
+    timestamp_period: f32,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
@@ -91,6 +96,8 @@ struct InternalApp {
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
     debug_type: u32,
+
+    delta_ms_buffer: [f64; 8],
 }
 
 impl InternalApp {
@@ -291,8 +298,13 @@ impl InternalApp {
             &svo
         );
 
+        let query_pool = query::create_query_pool(&device);
+        let timestamp_period = physical_device_properties.properties.limits.timestamp_period;
+
+        /*
         let ray_trace_buffers = rays::create_ray_trace_buffers(&device, &mut allocator, &debug_marker);
         log::info!("created ray trace buffers");
+        */
 
         Self {
             input: Default::default(),
@@ -320,6 +332,8 @@ impl InternalApp {
             generate_voxel_compute_pipeline,
             tick_voxel_compute_pipeline,
             descriptor_pool,
+            query_pool,
+            timestamp_period,
             allocator,
             voxel_image,
             svo,
@@ -333,7 +347,8 @@ impl InternalApp {
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
             debug_type: 0,
-            ray_trace_buffers,
+            delta_ms_buffer: [0f64; 8]
+            //ray_trace_buffers,
         }
     }
 
@@ -443,6 +458,7 @@ impl InternalApp {
         self.device
             .begin_command_buffer(cmd, &cmd_buffer_begin_info)
             .unwrap();
+        self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
         //self.sun = vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized();
         self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
@@ -614,7 +630,11 @@ impl InternalApp {
             raw,
         );
 
+        self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, self.query_pool, 0);
+
         self.device.cmd_dispatch(cmd, width_group_size, height_group_size, 1);
+
+        self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, self.query_pool, 1);
 
         let src_shader_write_to_transfer_src = vk::ImageMemoryBarrier2::default()
             .old_layout(vk::ImageLayout::GENERAL)
@@ -730,7 +750,13 @@ impl InternalApp {
         self.device
             .free_descriptor_sets(self.descriptor_pool, &all_descriptor_sets_for_frame)
             .unwrap();
-        
+
+        let mut timestamps = [0u64; 2];
+        self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).unwrap();
+        let delta_in_ms = ((timestamps[1] - timestamps[0]) as f64 * self.timestamp_period as f64) / 1000000.0f64;
+        self.delta_ms_buffer.rotate_right(1);
+        self.delta_ms_buffer[0] = delta_in_ms;
+
         /*
         if let Some(desc_temp) = desc_temp{
             self.device.free_descriptor_sets(self.descriptor_pool, &[desc_temp]).unwrap();
@@ -739,6 +765,8 @@ impl InternalApp {
     }
 
     pub unsafe fn destroy(mut self) {
+        self.device.device_wait_idle().unwrap();
+
         self.render_compute_pipeline.destroy(&self.device);
         log::info!("destroyed render compute pipeline");
 
@@ -778,8 +806,11 @@ impl InternalApp {
         self.svo.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVO buffer");
 
-        self.ray_trace_buffers.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed ray trace buffers");
+        //self.ray_trace_buffers.destroy(&self.device, &mut self.allocator);
+        //log::info!("destroyed ray trace buffers");
+
+        self.device.destroy_query_pool(self.query_pool, None);
+        log::info!("destroyed query pool");
 
         // TODO: Just cope with the error messages vro
         self.device
@@ -865,7 +896,9 @@ impl ApplicationHandler for App {
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyP)).pressed() {
-                    dbg!(delta);
+                    let render_time_avg = inner.delta_ms_buffer.iter().sum::<f64>() / inner.delta_ms_buffer.len() as f64;
+                    let delta_ms = delta * 1000f32;
+                    println!("CPU delta: {delta_ms:.3}, Main Compute Render Time Average: {render_time_avg:.3}");
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {

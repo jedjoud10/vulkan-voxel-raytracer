@@ -482,7 +482,8 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
         }
     }
 
-    let generated_children = (0..30).into_par_iter().map(|i| {
+    let count = (pseudo_random(0x569A23 ^ base ^ seed) % 40).clamp(7, 12);
+    let generated_children = (0..count).into_par_iter().map(|i| {
         let dst_index = (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 64);
         let child = Box::new(test_sparse_voxel_octree_recurse(base - 1, dst_index));
         (dst_index, child)
@@ -502,7 +503,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    return test_sparse_voxel_octree_recurse(5, 0x0323f);
+    return test_sparse_voxel_octree_recurse(7, 0x0323f);
 
     let mut children = [const { None }; 64];
 
@@ -539,7 +540,12 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
     let mut bitmask_vec = Vec::<u64>::new();
     let mut index_vec = Vec::<u32>::new();
     let mut nodes_visited = 0;
+    let mut non_leaf_nodes_visited = 0;
     let mut test_count = 0u32;
+
+    // some sort of metrics... perhaps
+    let mut fullness_total = 0f32;
+    let mut fullness_normalized_total_nodes = 0f32;
 
     while let Some(TraversalNode { node, depth, parent_base_child_index: parent_index, self_packed_child_offset  }) = queue.pop_front() {
         /*
@@ -565,6 +571,8 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
         if node.bottom {
             base_child_index = u32::MAX;
         } else {
+            non_leaf_nodes_visited += 1;
+            fullness_total += bitmask.count_ones() as f32 / 64f32;
             if let Some(children) = node.children.as_ref() {
                 for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
                     queue.push_back(TraversalNode { node: child, depth: depth + 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
@@ -594,7 +602,13 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
         nodes_visited += 1;
     }
 
+    fullness_normalized_total_nodes = (fullness_total / non_leaf_nodes_visited as f32) * 100f32;
+
     log::debug!("converted svo, nodes visited: {nodes_visited}, length: {}", bitmask_vec.len());
+    log::debug!("metrics:");
+    log::debug!(" - fullness total: {fullness_total}");
+    log::debug!(" - fullness normalized: {fullness_normalized_total_nodes:.2}%");
+
 
     (bitmask_vec, index_vec)
 }
@@ -791,12 +805,12 @@ pub unsafe fn convert_mips_svo(
     let (bitset_vec, index_vec) = convert_to_buffers(test);
 
     let bitmask_data = bitset_vec.as_slice();
-    let bitmask_data_bytes: &[u8] = bytemuck::cast_slice(bitmask_data); 
+    let bitmask_data_bytes: &[u32] = bytemuck::cast_slice(bitmask_data); 
 
     buffer::write_to_buffer(device, pool, queue, svo.bitmask_buffer.buffer, allocator, bitmask_data_bytes);
 
     let index_data = index_vec.as_slice();
-    let index_data_bytes: &[u8] = bytemuck::cast_slice(&index_data); 
+    let index_data_bytes: &[u32] = bytemuck::cast_slice(&index_data); 
     buffer::write_to_buffer(device, pool, queue, svo.index_buffer.buffer, allocator, index_data_bytes);
 }
 

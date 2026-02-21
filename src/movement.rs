@@ -17,6 +17,7 @@ pub struct Movement {
     pub proj_matrix: vek::Mat4<f32>,
     pub view_matrix: vek::Mat4<f32>,
     
+    fov: f32,
     summed_mouse: vek::Vec2<f32>,
     local_velocity: vek::Vec2<f32>,
     velocity: vek::Vec3<f32>,
@@ -30,6 +31,7 @@ impl Movement {
         let snapshots: Vec<Snapshot> = serde_json::from_str(include_str!("snapshots.json")).unwrap();
 
         Self {
+            fov: 80f32,
             position: vek::Vec3::new(40.5f32, 30f32, 40.5f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
             fixed_mode_snapshot_index: None,
@@ -50,7 +52,7 @@ impl Movement {
     pub fn update(&mut self, input: &Input, ratio: f32, delta: f32) {
         self.local_velocity = vek::Vec2::<f32>::zero();
         let speed = if input.get_button(KeyCode::ShiftLeft).held() {
-            2f32 + 2f32.powf(self.boost)
+            100f32 + 8f32.powf(self.boost)
         } else if input.get_button(KeyCode::ControlLeft).held() {
             0.25f32
         } else {
@@ -69,7 +71,7 @@ impl Movement {
             self.local_velocity.x = -1f32;
         }
 
-        self.boost += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta));
+        //self.boost += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta));
         self.boost = self.boost.clamp(0.0, 5.0);
         let sens = 1.0f32;
         let summed_mouse_target = vek::Vec2::new(
@@ -89,8 +91,10 @@ impl Movement {
 
         let uhh = 1f32 / ratio;
         // TODO: fix the weird radian fov?
+        self.fov += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta));
+        self.fov = self.fov.clamp(0.05, 179.5);
         self.proj_matrix =
-            vek::Mat4::<f32>::perspective_rh_no(80.0f32.to_radians(), uhh, 0.001f32, 1000f32);
+            vek::Mat4::<f32>::perspective_rh_no((self.fov).to_radians(), uhh, 0.001f32, 1000f32);
         let rot = vek::Mat4::from(self.rotation);
 
         let forward = rot.mul_direction(-vek::Vec3::unit_z());

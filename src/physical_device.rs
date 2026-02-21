@@ -45,8 +45,12 @@ pub(super) unsafe fn get_physical_device_score(
         device_features_12.shader_float16 == 1 &&
         device_features_12.shader_int8 == 1 &&
         device_features_13.synchronization2 == 1;
+
+    let physical_device_limits_supported =
+        properties.limits.timestamp_period > 0f32;
         
     log::info!("physical device supports features: {physical_device_features_supported}");
+    log::info!("physical device supports limits: {physical_device_limits_supported}");
 
     let mut score = 0;
 
@@ -74,7 +78,7 @@ pub(super) unsafe fn get_physical_device_score(
         .is_some();
     log::info!("compatible surface: {surface_compatible}");
 
-    if !double_buffering_supported || !present_modes_supported || !surface_compatible || !physical_device_features_supported {
+    if !double_buffering_supported || !present_modes_supported || !surface_compatible || !physical_device_features_supported || !physical_device_limits_supported {
         return None;
     }
 

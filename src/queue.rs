@@ -15,7 +15,8 @@ pub unsafe fn find_appropriate_queue_family_index(
                 .unwrap();
             let graphics = props.queue_flags.contains(vk::QueueFlags::GRAPHICS);
             let compute = props.queue_flags.contains(vk::QueueFlags::COMPUTE);
-            present && graphics && compute
+            let has_timestamps = props.timestamp_valid_bits > 0;
+            present && graphics && compute && has_timestamps
         })
         .unwrap()
 }
