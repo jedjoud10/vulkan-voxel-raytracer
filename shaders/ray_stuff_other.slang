@@ -26,8 +26,10 @@ struct Statistics {
     int exit_type;
 }
 
-static const int DEPTH = 6;
+static const int DEPTH = 5;
 static const float EPS = 0.00001;
+static const uint32_t BOTTOM_NODE = 0xFFFFFFFF;
+static const uint32_t FULL_NODE = 0xFFFFFFFF-1; 
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
 // TODO: OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE
@@ -43,6 +45,8 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
     float distance,
     SparseVoxelOctree svo,
     uint16_t3 parent_world_space_origin,
+    bool full_node,
+    uint8_t previous_face,
     inout Statistics stats,
 ) {
     // quick check
@@ -62,7 +66,8 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
     floored_pos = (uint16_t3)clamp(floored_pos, 0, 4);
 
     float3 side_dist = ((dir_sign * (floored_pos - modified_ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
-    bool3 eqs = 0;    
+    uint8_t face = previous_face;
+    bool3 eqs = false;    
     
     [loop]
     for (uint8_t i = 0; i < 12; i++) {
@@ -76,7 +81,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
         uint8_t bit_index = local.z | local.y << 2 | local.x << 4;
         
         [branch]
-        if (bit_index < 64 && ((raw >> bit_index) & 1) == 1) {  
+        if ((bit_index < 64 && ((raw >> bit_index) & 1) == 1) || full_node) {  
             // still need an offset though, for the normals :(((
             float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size);
 
@@ -91,7 +96,21 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
             lod_check = true; // disables it...
 
             [branch]
-            if (K > END && base_index != 0xFFFFFFFF && lod_check) {
+            if (full_node) {
+                if (K > 0) {
+                    stats.exit_type = 2;
+                    return dda_trace_recurse<K - 1, END>(0, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
+                } else {
+                    float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
+                    float3 whatever_this_is = modified_ray_pos + ray_dir * distance_offset + parent_world_space_origin / voxel_size;
+                    stats.exit_type = 2;
+                    return DdaTraversalOutput(true, clamp(world, parent_world_space_origin, parent_world_space_origin+voxel_size*4), origin, face);
+                }
+            }
+
+            // check if we have reached the bottom most node and exit if so
+            [branch]
+            if (K > END && base_index != BOTTOM_NODE && lod_check) {
                 // calculate child offset index, which is NOT the same as the bit index
                 // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
                 // create a mask for the first `n` bits
@@ -105,25 +124,13 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 uint32_t actual_child_index = base_index + child_offset_index;
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
 
-                // check if we have reached a "NULL" node
-                // this either means two things:
-                // 1. we have reached the bottom 
-                if (new_base_index == 0xFFFFFFFF) {
-
+                // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
+                if (new_base_index == FULL_NODE) {
+                    stats.exit_type = 2;
+                    return dda_trace_recurse<K - 1, END>(new_base_index, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
                 }
 
-                if (new_base_index == 0xFFFFFFFF && (K-1) == 0) {
-                    uint8_t face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
-                    float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
-                    float3 whatever_this_is = modified_ray_pos + ray_dir * distance_offset + parent_world_space_origin / voxel_size;
-                    stats.exit_type = 1;
-                    return DdaTraversalOutput(true, clamp(world, parent_world_space_origin, parent_world_space_origin+voxel_size*4), origin, face);
-                }
-
-                if (new_base_index == 0xFFFFFFFF) {
-                    return DdaTraversalOutput(false);
-                }
-
+                // TODO:
                 // ANOTHER POSSIBLE OPTIMIZATION: have a separate "5-bvh" mode for nodes if we can construct proper bvhs for them during traversal
                 // for super flat / planar nodes, this should work in our favour because it could represent the entire brick node (u64) in wayyy less memory
                 // assuming AABB bounds are quantized (2 bits per axii, since we use the range 0..4), a single AABB would take 2*3 * 2 = 12 bits
@@ -141,20 +148,19 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
                 stats.buffer_fetches += 1;
 
-                var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, stats);
+                var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, false, face, stats);
                 if (result.hit) {
                     return result;
                 }
             } else {
-                uint8_t face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
                 float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
-                float3 whatever_this_is = modified_ray_pos + ray_dir * distance_offset + parent_world_space_origin / voxel_size;
-                stats.exit_type = 2;
+                stats.exit_type = 3;
                 return DdaTraversalOutput(true, clamp(world, parent_world_space_origin, parent_world_space_origin+voxel_size*4), origin, face);
             }
         }
 
         eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+        face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
         side_dist += select(eqs, inv_dir, 0.0);
         floored_pos += select(eqs, (int16_t3)dir_sign, int16_t3(0));
         stats.iterations += 1;
@@ -172,5 +178,5 @@ DdaTraversalOutput trace_shi(
 ) {
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_trace_recurse<DEPTH - 1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, iter);
+    return dda_trace_recurse<DEPTH - 1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, false, 0, iter);
 }

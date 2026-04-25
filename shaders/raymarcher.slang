@@ -16,10 +16,10 @@ StructuredBuffer<uint32_t> svo_indices_buffer;
 enum DebugType: uint {
     Combined,
     Iterations,
-    Recursions,
-    FullHalt,
+    BufferFetches,
+    Normals,
     World,
-    Timer,
+    ExitType,
 }
 
 // GPTed. could not find this fuckass function online. Im so fucking stupid
@@ -52,9 +52,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     //bool hit = any_hit_trace_fine(ray_pos, ray_dir, svo);
     //uint clock = getRealtimeClock().x;
     var ray = trace_shi(ray_pos, ray_dir, svo, stats);
-    output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
-    //output[id.xy] = float4((ray.block_pos  % 10) / 10, 0);
-    return;
+
+    //
+    //
+    //
     //var b2 = trace_shi(b.world + sun.xyz * 1, sun.xyz, svo, stats);
     /*
     //bool b = any_hit_trace_fine(ray_pos, ray_dir, svo, stats);
@@ -82,27 +83,26 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
     float3 color = 0.0;
     if (ray.hit) {
-        float3 world = ray.world;
-        float3 normal = get_face_normal(ray.face, sign(ray_dir));
-        normal = normalize(normal);
+        // improve the accuracy of the world position by utilizing the face (assumption we can make since we are dealing with pure cubic voxels)
+        float3 world = get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(ray_dir));
+        float3 normal = normalize(get_face_normal(ray.face, sign(ray_dir)));
+        normal = normalize(world - ray.block_pos - 0.5);
 
         float3 diffuse = 1.0;
-        float ao = 0.0;
+        float ao = 1.0;
 
         float3 d = reflect(ray_dir, normal);
         float shadow = 1.0;
         float sky_visibility = 1.0;
 
-        /*
         shadow = 0.0;
         for (int k = 0; k < 4; k++) {
-            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+            float3 rng = (hash33(floor(world) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
             float3 dir = normalize(sun.xyz + rng * 0.05);
             float d = 0;
-            bool t = trace_shi(world - ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
+            bool t = trace_shi(floor(world) - ray_dir * 0.001 + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
             shadow += (t ? 0.0 : 1) / 4.0;
         }
-        */
 
         /*
         sky_visibility = 0.0;
@@ -128,6 +128,30 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     }
 
     //output[id.xy] = float4(((float3)tst.block_pos % 10) / 10.0, 0);
-    output[id.xy] = float4(aces(color), 0);
+    switch (debug_type) {
+        case DebugType::Combined:
+            output[id.xy] = float4(aces(color), 0);
+            break;
+        case DebugType::Iterations:
+            output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
+            break;
+        case DebugType::BufferFetches:
+            output[id.xy] = float4(heatmap(stats.buffer_fetches / 256.0), 0);
+            break;
+        case DebugType::ExitType:
+            output[id.xy] = float4(stats.exit_type / 3.0);
+            break;
+        case DebugType::World:
+            //output[id.xy] = float4((ray.block_pos % 10) / 10.0, 0);
+            //output[id.xy] = float4(sin(ray.world) * 0.5 + 0.5, 0);
+            output[id.xy] = float4((ray.world % 10) / 10.0, 0);
+            break;
+        case DebugType::Normals:
+            output[id.xy] = float4((get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(ray_dir)) % 10) / 10.0, 0);
+            //output[id.xy] = float4(get_face_normal(ray.face, sign(ray_dir)) * 0.5 + 0.5, 0);
+            break;
+        default:
+            break;
+    }
     //output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
 }

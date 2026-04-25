@@ -119,13 +119,14 @@ pub unsafe fn write_to_buffer(
         .unwrap()[0];
     device.begin_command_buffer(cmd, &Default::default()).unwrap();
 
+    let bytes_formatted = bytesize::ByteSize::b(bytes.len() as u64);
     let staging_buffer_opt = if bytes.len() < BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD {
         // inline (command buffer write) impl
-        log::info!("writing {} bytes to buffer, using inline path", bytes.len());
+        log::info!("writing {} to buffer, using inline path", bytes_formatted.display().si());
         device.cmd_update_buffer(cmd, dst_buffer, 0, bytes);
         None
     } else {
-        log::info!("writing {} bytes to buffer, using staging buffer path", bytes.len());
+        log::info!("writing {} to buffer, using staging buffer path", bytes_formatted.display().si());
         // staging buffer impl
         let staging_buffer_create_info = vk::BufferCreateInfo::default()
             .flags(vk::BufferCreateFlags::empty())

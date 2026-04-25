@@ -3,6 +3,7 @@ use std::{collections::VecDeque, ffi::{CStr, CString}, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use smallvec::SmallVec;
 
 use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 
@@ -437,7 +438,8 @@ pub unsafe fn generate_voxel_image(
 
 struct Node {
     children: Option<Box<[Option<Box<Node>>; 64]>>,
-    bottom: bool,
+    bottom: bool, // set to true when height=0 or height=1
+    full: bool, // set to true when all underlying nodes are full. This avoids having to store them in memory. If this is set then we will discard the result of `children` for any computations if the ray hits this node
 }
 
 fn pseudo_random(seed: u32) -> u32 {
@@ -495,43 +497,11 @@ fn surface_area_bitmask(bitmask: u64) -> u32 {
     surface_area
 }
 
-fn base_plate(base: u32) -> Node {
-    if base == 0 {
-        return Node {
-            children: None,
-            bottom: true,
-        };
-    }
-
-    
-    let mut children = [const { None }; 64];
-    let mut recursive= Vec::<u32>::new();
-
-    for x in  0..4 {
-        for y in 0..4 {
-            for z in 0..4 {
-                let vec = vek::Vec3::new(x,y,z);
-                let i = x + y * 4 + z * 4 * 4;
-
-                if y == 3 {
-                    recursive.push(i as u32);
-                }
-            }
-        }
-    }
-
-    let generated_children = recursive.into_par_iter().map(|i| {
-        let child = Box::new(base_plate(base - 1));
-        (i, child)
-    }).collect::<Vec<_>>();
-
-    for (dst_index, child) in generated_children {
-        children[dst_index as usize] = Some(child);
-    }
-    
+fn full_node() -> Node {
     Node {
-        children: Some(Box::new(children)),
-        bottom: base == 1,
+        children: None,
+        bottom: false,
+        full: true,
     }
 }
 
@@ -540,23 +510,24 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
         return Node {
             children: None,
             bottom: true,
+            full: false,
         };
     }
 
     let mut children = [const { None }; 64];
 
-    // small chance to exit early
     /*
+    // small chance to exit early
     if (pseudo_random(0xA23 ^ base ^ seed) % 10) < 2 {
-        children.fill_with(|| Some(Box::new(test_sparse_voxel_octree_recurse(0, 0))));
         return Node {
-            children: Some(Box::new(children)),
-            bottom: true,
+            children: None,
+            bottom: false,
+            full: false,
         }
     }
     */
 
-    let mut recursive= Vec::<u32>::new();
+    let mut recursive= SmallVec::<[u8; 8]>::new();
 
     for x in  0..4 {
         for y in 0..4 {
@@ -566,17 +537,17 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 
                 // base plate
                 if y == 0 {
-                    children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                    children[i] = Some(Box::new(full_node()));
                     //children[i] = Some(Box::new(base_plate(base - 1)));
                 }
 
                 if y == 1 {
                     if (x == 0 || x == 3) || (z == 0 || z == 3) {
                         // inductive case
-                        recursive.push(i as u32);
+                        recursive.push(i as u8);
                     } else {
                         // mid plate
-                        children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                        children[i] = Some(Box::new(full_node()));
                         //children[i] = Some(Box::new(base_plate(base - 1)));
                     }
                 }
@@ -584,7 +555,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                 if y == 2 {
                     if (x == 1 || x == 2) && (z == 1 || z == 2) {
                         // inductive case
-                        recursive.push(i as u32);
+                        recursive.push(i as u8);
                     }
                 }
             }
@@ -592,24 +563,28 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
     }
 
     let generated_children = recursive.into_par_iter().map(|i| {
-        let dst_index = (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 64);
+        let dst_index = (pseudo_random((*i as u32) ^ 0x03f23 ^ base ^ seed) % 64);
         let child = Box::new(test_sparse_voxel_octree_recurse(base - 1, dst_index));
         (i, child)
     }).collect::<Vec<_>>();
 
     for (dst_index, child) in generated_children {
-        children[dst_index as usize] = Some(child);
+        children[*dst_index as usize] = Some(child);
     }
     
     Node {
         children: Some(Box::new(children)),
         bottom: base == 1,
+        full: false, // TODO: implement thing that figures this out by looking at `children`
     }
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    test_sparse_voxel_octree_recurse(6, 0x0323f)
+    test_sparse_voxel_octree_recurse(5, 0x0323f)
 }
+
+const BOTTOM_NODE: u32 = u32::MAX;
+const FULL_NODE: u32 = u32::MAX-1; 
 
 struct TraversalNode<'a> {
     node: &'a Node,
@@ -636,7 +611,7 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
 
         let self_index = index_vec.len();
         
-        // verifies that the current index matches up with the packed index relative to parent
+        // VERIFY: makes sure that the packed child index matches up
         if let Some(parent) = parent_index {
             debug_assert_eq!(self_index, parent + self_packed_child_offset);
         }
@@ -650,23 +625,29 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
         
         let mut base_child_index = test_count + 1;
 
+        // check if we are handling the base case
         if node.bottom {
-            base_child_index = u32::MAX;
-
+            base_child_index = BOTTOM_NODE;
             if node.children.is_none() {
                 bitmask = u64::MAX;
             }
         } else {
-            if let Some(children) = node.children.as_ref() {
-                for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
-                    queue.push_back(TraversalNode { node: child, depth: depth + 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
-                    test_count += 1;
+            if node.full {
+                // node is full, discard children nodes, and store a specialized magic value that indicates that this node is full
+                base_child_index = FULL_NODE;
+            } else {
+                // node is not full, we must compute bitmask of children and stuff
+                if let Some(children) = node.children.as_ref() {
+                    for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
+                        queue.push_back(TraversalNode { node: child, depth: depth + 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
+                        test_count += 1;
 
-
-                    let mask = (1u64 << ci) - 1;
-                    let masked = bitmask & mask;
-                    let test = masked.count_ones();
-                    debug_assert_eq!(test, pci as u32);
+                        // VERIFY: makes sure that the packed child index matches up
+                        let mask = (1u64 << ci) - 1;
+                        let masked = bitmask & mask;
+                        let test = masked.count_ones();
+                        debug_assert_eq!(test, pci as u32);
+                    }
                 }
             }
         }
@@ -681,7 +662,7 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
         log::debug!(" - depth {i}: {base_index}");
     }
 
-    let sah_total = if (false) {
+    let sah_total = if false {
         log::debug!("calculating total SAH...");
         bitmask_vec.par_iter().map(|bitmask| {
             let surface_area_4x4x4 = 4*4 * 6;
@@ -707,6 +688,13 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
     log::debug!(" - fullness normalized: {fullness_normalized_total_nodes:.2}%");
     log::debug!(" - sah total: {sah_total}");
     log::debug!(" - sah normalized: {sah_normalized_total_nodes:.2}%");
+
+    for i in 0..50 {
+        let index = (i + base_indices_for_depth.last().unwrap()) as usize;
+        let node_bitmask = &bitmask_vec[index];
+        let node_index = &index_vec[index];
+        log::debug!("node index: {node_index}, bitmask: {node_bitmask:#b}");
+    }
 
 
     (bitmask_vec, index_vec)

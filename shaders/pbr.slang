@@ -117,7 +117,8 @@ public float3 brdf(
 	//return specular_fresnel_ambient;
 	//return surface.sky_visibility;
 	//return environment_specular * environment_specular_fresnel_strength;
-	return brdf + ambient * 0.8 + environment_specular * environment_specular_fresnel_strength;
+	return brdf + ambient * 0.2;
+	//return brdf + ambient * 0.8 + environment_specular * environment_specular_fresnel_strength;
 	//return specular;
 	//return ambient * 0.5;
 }
