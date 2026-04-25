@@ -68,7 +68,6 @@ pub unsafe fn create_swapchain(
     (swapchain_loader, swapchain, images, surface_formats[0].format)
 }
 
-pub const SCALING_FACTOR: u32 = 1;
 
 pub unsafe fn create_temporary_target_render_image(
     instance: &ash::Instance,
@@ -80,6 +79,7 @@ pub unsafe fn create_temporary_target_render_image(
     queue_family_index: u32,
     extent: vk::Extent2D,
     binder: &Option<ash::ext::debug_utils::Device>,
+    scaling_factor: u32,
     name: &CStr
 ) -> (vk::Image, gpu_allocator::vulkan::Allocation) {
     let queue_family_indices = [queue_family_index];
@@ -88,8 +88,8 @@ pub unsafe fn create_temporary_target_render_image(
         .unwrap();
     let rt_image_create_info = vk::ImageCreateInfo::default()
         .extent(vk::Extent3D {
-            width: extent.width / SCALING_FACTOR,
-            height: extent.height / SCALING_FACTOR,
+            width: extent.width / scaling_factor,
+            height: extent.height / scaling_factor,
             depth: 1,
         })
         .format(surface_formats[0].format)

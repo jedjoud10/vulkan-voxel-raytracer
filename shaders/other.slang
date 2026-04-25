@@ -344,7 +344,7 @@ bool dda<let N : int>(
 
 float3 per_block_unique_colour(uint3 block_pos) {
     float3 col = normalize(hash33(block_pos * float3(23.231, -435.4354, 9412.1)));
-    return lerp(col, 1.0, 0.8f);
+    return col;
 }
 
 // TODO: need to calculate how "close" we get to the surface...

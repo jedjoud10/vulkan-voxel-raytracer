@@ -25,6 +25,7 @@ mod rays;
 
 use ash;
 use ash::vk;
+use clap::Parser;
 use gpu_allocator::vulkan::Allocation;
 use input::Button;
 use input::Input;
@@ -44,6 +45,14 @@ use crate::buffer::*;
 use crate::pipeline::*;
 use crate::rays::*;
 use crate::voxel::*;
+
+
+#[derive(clap::Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value_t = 1)]
+    resolution_scaling_factor: u32,
+}
 
 struct InternalApp {
     input: Input,
@@ -96,12 +105,14 @@ struct InternalApp {
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
     debug_type: u32,
+    args: Args,
+
 
     delta_ms_buffer: [f64; 8],
 }
 
 impl InternalApp {
-    pub unsafe fn new(event_loop: &ActiveEventLoop) -> Self {
+    pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
         let mut assets = HashMap::<&str, Vec<u32>>::new();
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
@@ -218,6 +229,7 @@ impl InternalApp {
                     queue_family_index,
                     extent,
                     &debug_marker,
+                    args.resolution_scaling_factor,
                     c"temporary render target image"
                 )
             })
@@ -345,15 +357,16 @@ impl InternalApp {
             visible_surface_buffer,
             visible_surface_counter_buffer,
             visible_surface_indirect_dispatch_buffer,
-            sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
+            sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
             debug_type: 0,
-            delta_ms_buffer: [0f64; 8]
+            delta_ms_buffer: [0f64; 8],
+            args,
             //ray_trace_buffers,
         }
     }
 
     pub unsafe fn click(&mut self, add: bool) {
-        let forward = vek::Mat4::from(self.movement.rotation).mul_direction(-vek::Vec3::unit_z()).with_w(0.0f32);
+        let forward = self.movement.forward().with_w(0.0f32);
         let position = (self.movement.position + forward * 2.0).map(|x| x as u32);
 
 
@@ -415,6 +428,7 @@ impl InternalApp {
                     self.queue_family_index,
                     extent,
                     &self.debug_marker,
+                    self.args.resolution_scaling_factor,
                     c"temporary render target image"
                 )
             })
@@ -460,7 +474,6 @@ impl InternalApp {
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
-        self.sun = vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized();
         //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
         let push_constants = PushConstants2 {
@@ -604,7 +617,7 @@ impl InternalApp {
 
         let size = self.window.inner_size();
         let size = vek::Vec2::<u32>::new(size.width, size.height)
-            .map(|val| val / swapchain::SCALING_FACTOR);
+            .map(|val| val / self.args.resolution_scaling_factor);
 
         let group_size = 8 as f32;
         let width_group_size = (size.x as f32 / group_size).ceil() as u32;
@@ -653,8 +666,8 @@ impl InternalApp {
 
         let origin_offset = vk::Offset3D::default();
         let src_extent_offset = vk::Offset3D::default()
-            .x(self.window.inner_size().width as i32 / swapchain::SCALING_FACTOR as i32)
-            .y(self.window.inner_size().height as i32 / swapchain::SCALING_FACTOR as i32)
+            .x(self.window.inner_size().width as i32 / self.args.resolution_scaling_factor as i32)
+            .y(self.window.inner_size().height as i32 / self.args.resolution_scaling_factor as i32)
             .z(1);
         let dst_extent_offset = vk::Offset3D::default()
             .x(self.window.inner_size().width as i32)
@@ -812,7 +825,6 @@ impl InternalApp {
         self.device.destroy_query_pool(self.query_pool, None);
         log::info!("destroyed query pool");
 
-        // TODO: Just cope with the error messages vro
         self.device
             .wait_for_fences(&[self.end_fence], true, u64::MAX)
             .unwrap();
@@ -850,6 +862,7 @@ impl InternalApp {
 
 struct App {
     internal: Option<InternalApp>,
+    args: Option<Args>,
     start: Instant,
     last: Instant,
 }
@@ -857,7 +870,7 @@ struct App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         unsafe {
-            self.internal = Some(InternalApp::new(event_loop));
+            self.internal = Some(InternalApp::new(event_loop, self.args.take().unwrap()));
         }
     }
 
@@ -905,6 +918,10 @@ impl ApplicationHandler for App {
                     inner.debug_type = (inner.debug_type + 1) % 6;
                 }
 
+                if inner.input.get_button(Button::Mouse(MouseButton::Middle)).held() {
+                    inner.sun = inner.movement.forward();
+                }
+
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyQ)).pressed() {
                     event_loop.exit();
                     self.internal.take().unwrap().destroy();
@@ -940,7 +957,9 @@ impl ApplicationHandler for App {
     }
 }
 
+
 pub fn main() {
+    let args = Args::parse();
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Debug)
         .init();
@@ -949,6 +968,7 @@ pub fn main() {
         start: Instant::now(),
         last: Instant::now(),
         internal: None,
+        args: Some(args),
     };
     event_loop.run_app(&mut app).unwrap();
 }

@@ -142,6 +142,10 @@ impl Movement {
             }
         }
     }
+    
+    pub fn forward(&self) -> vek::Vec3<f32> {
+        vek::Mat4::from(self.rotation).mul_direction(-vek::Vec3::unit_z())
+    }
 }
 
 pub fn horizontal_to_vertical(hfov: f32, ratio: f32) -> f32 {

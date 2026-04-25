@@ -110,7 +110,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
 
             // check if we have reached the bottom most node and exit if so
             [branch]
-            if (K > END && base_index != BOTTOM_NODE && lod_check) {
+            if (K > 0 && base_index != BOTTOM_NODE && lod_check) {
                 // calculate child offset index, which is NOT the same as the bit index
                 // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
                 // create a mask for the first `n` bits
@@ -125,7 +125,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
 
                 // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
-                if (new_base_index == FULL_NODE) {
+                if (new_base_index == FULL_NODE || K <= END) {
                     stats.exit_type = 2;
                     return dda_trace_recurse<K - 1, END>(new_base_index, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
                 }

@@ -94,7 +94,11 @@ public float3 brdf(
 	
 
 	float3 specular = specular(f0, surface.roughness, camera.view, light.direction, surface.normal, half_view);
-	float3 brdf = kd * (surface.diffuse) + specular + fresnel(f0, half_view, camera.view);
+
+	// HACK: this should be here right? no clue why it wasn't there in the original version
+	float3 tmp = (specular + fresnel(f0, half_view, camera.view)) * surface.shadows;
+
+	float3 brdf = kd * (surface.diffuse) + tmp;
 	float3 lighting = float3(max(dot(light.direction, surface.normal), 0.0)) * surface.shadows;
 	brdf *= lighting * light.color;
 
@@ -117,7 +121,7 @@ public float3 brdf(
 	//return specular_fresnel_ambient;
 	//return surface.sky_visibility;
 	//return environment_specular * environment_specular_fresnel_strength;
-	return brdf + ambient * 0.2;
+	return brdf + ambient * 0.4;
 	//return brdf + ambient * 0.8 + environment_specular * environment_specular_fresnel_strength;
 	//return specular;
 	//return ambient * 0.5;
