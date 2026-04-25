@@ -47,7 +47,7 @@ pub unsafe fn create_swapchain(
         .clipped(true)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         .old_swapchain(vk::SwapchainKHR::null())
-        .present_mode(present);
+        .present_mode(vk::PresentModeKHR::IMMEDIATE);
 
     let swapchain_loader = ash::khr::swapchain::Device::new(instance, device);
     let swapchain = swapchain_loader

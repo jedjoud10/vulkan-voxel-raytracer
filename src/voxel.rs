@@ -451,6 +451,90 @@ fn pseudo_random(seed: u32) -> u32 {
     value
 }
 
+fn is_set(bitmask: u64, index: u32) -> bool {
+    ((bitmask >> index) & 1) == 1
+}
+
+const OFFSETS: [vek::Vec3::<i32>; 6] = [
+    vek::Vec3::new(-1, 0, 0),
+    vek::Vec3::new(1, 0, 0),
+    vek::Vec3::new(0, -1, 0),
+    vek::Vec3::new(0, 1, 0),
+    vek::Vec3::new(0, 0, -1),
+    vek::Vec3::new(0, 0, 1),
+];
+
+fn surface_area_bitmask(bitmask: u64) -> u32 {
+    let mut surface_area = 0u32;
+    for x in  0..4i32 {
+        for y in 0..4i32 {
+            for z in 0..4i32 {
+                let vec = vek::Vec3::new(x,y,z);
+                let i = (z + y * 4 + x * 4 * 4) as u32;
+
+                if !is_set(bitmask, i) {
+                    continue;
+                } 
+
+
+                for offset in OFFSETS {
+                    let vec_offsetted = vec + offset;
+                            
+                    if vec_offsetted.cmpge(&vek::Vec3::zero()).reduce_bitand() && vec_offsetted.cmplt(&vek::Vec3::broadcast(4)).reduce_bitand() {
+                        let i_offsetted = (vec_offsetted.z + vec_offsetted.y * 4 + vec_offsetted.x * 4 * 4) as u32;
+                        if !is_set(bitmask, i_offsetted) {
+                            surface_area += 1;
+                        } 
+                    } else {
+                        surface_area += 1;
+                    }
+                }
+            }
+        }
+    }
+    surface_area
+}
+
+fn base_plate(base: u32) -> Node {
+    if base == 0 {
+        return Node {
+            children: None,
+            bottom: true,
+        };
+    }
+
+    
+    let mut children = [const { None }; 64];
+    let mut recursive= Vec::<u32>::new();
+
+    for x in  0..4 {
+        for y in 0..4 {
+            for z in 0..4 {
+                let vec = vek::Vec3::new(x,y,z);
+                let i = x + y * 4 + z * 4 * 4;
+
+                if y == 3 {
+                    recursive.push(i as u32);
+                }
+            }
+        }
+    }
+
+    let generated_children = recursive.into_par_iter().map(|i| {
+        let child = Box::new(base_plate(base - 1));
+        (i, child)
+    }).collect::<Vec<_>>();
+
+    for (dst_index, child) in generated_children {
+        children[dst_index as usize] = Some(child);
+    }
+    
+    Node {
+        children: Some(Box::new(children)),
+        bottom: base == 1,
+    }
+}
+
 fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
     if base == 0 {
         return Node {
@@ -483,6 +567,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                 // base plate
                 if y == 0 {
                     children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                    //children[i] = Some(Box::new(base_plate(base - 1)));
                 }
 
                 if y == 1 {
@@ -492,6 +577,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                     } else {
                         // mid plate
                         children[i] = Some(Box::new(test_sparse_voxel_octree_recurse(0, 0)));
+                        //children[i] = Some(Box::new(base_plate(base - 1)));
                     }
                 }
 
@@ -501,20 +587,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                         recursive.push(i as u32);
                     }
                 }
-
-
-
-                /*
-                if y == (pseudo_random((i as u32) ^ 0x03f23 ^ base ^ seed) % 4) && base == 1 {
-                    recursive.push(i);
-                }
-                */
-
-                /*
-                if (vec.cmpge(&vek::Vec3::broadcast(1)).reduce_and() && vec.cmple(&vek::Vec3::broadcast(2)).reduce_and()) {
-                    recursive.push(i);
-                }
-                */
             }
         }
     }
@@ -528,7 +600,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
     for (dst_index, child) in generated_children {
         children[dst_index as usize] = Some(child);
     }
-    //children[0] = Some(Box::new(test_sparse_voxel_octree_recurse(base - 1, 123)));
     
     Node {
         children: Some(Box::new(children)),
@@ -537,24 +608,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 }
 
 fn test_sparse_voxel_octree_root() -> Node {
-    return test_sparse_voxel_octree_recurse(6, 0x0323f);
-
-    let mut children = [const { None }; 64];
-
-    for x in 0..8 {
-        let index = pseudo_random(x ^ 0x03f23) % 64;
-
-        // these nodes will be discarded when we convert to buffers
-        children[index as usize] = Some(Box::new(Node {
-            children: None,
-            bottom: true,
-        }));
-    }
-
-    Node {
-        children: Some(Box::new(children)),
-        bottom: true,
-    }
+    test_sparse_voxel_octree_recurse(6, 0x0323f)
 }
 
 struct TraversalNode<'a> {
@@ -564,9 +618,6 @@ struct TraversalNode<'a> {
     self_packed_child_offset: usize,
 }
 
-// root 0: bitmask: u64, base child index: 0
-
-
 fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
     let mut queue = VecDeque::<TraversalNode>::new();
     queue.push_back(TraversalNode { node: &node, depth: 0, parent_base_child_index: None, self_packed_child_offset: 0 });
@@ -574,26 +625,23 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
     let mut bitmask_vec = Vec::<u64>::new();
     let mut index_vec = Vec::<u32>::new();
     let mut nodes_visited = 0;
-    let mut non_leaf_nodes_visited = 0;
     let mut test_count = 0u32;
-
-    // some sort of metrics... perhaps
-    let mut fullness_total = 0f32;
-    let mut fullness_normalized_total_nodes = 0f32;
+    let mut base_indices_for_depth = Vec::<u32>::new();
 
     while let Some(TraversalNode { node, depth, parent_base_child_index: parent_index, self_packed_child_offset  }) = queue.pop_front() {
-        /*
-        // if we are the first child and have a valid parent reference, update the "base child" index of the parent
-        if let Some(parent_node_index) = parent_node_index && first_child {
-            index_vec[parent_node_index as usize] = index_vec.len() as u16;
+        // keeps track of the "base" indinces where we start a specific AS hierarchy level
+        if base_indices_for_depth.len() < (depth+1) {
+            base_indices_for_depth.push(nodes_visited);
         }
-        */
 
         let self_index = index_vec.len();
+        
+        // verifies that the current index matches up with the packed index relative to parent
         if let Some(parent) = parent_index {
-            assert_eq!(self_index, parent + self_packed_child_offset);
+            debug_assert_eq!(self_index, parent + self_packed_child_offset);
         }
 
+        // creates a 64 bit mask that contains which children are enabled
         let mut bitmask = node.children.as_ref().map(|children| children.iter()
             .enumerate()
             .filter_map(|(i, x)| x.as_ref().map(|_| i))
@@ -609,43 +657,56 @@ fn convert_to_buffers(node: Node) -> (Vec<u64>, Vec<u32>) {
                 bitmask = u64::MAX;
             }
         } else {
-            non_leaf_nodes_visited += 1;
-            fullness_total += bitmask.count_ones() as f32 / 64f32;
             if let Some(children) = node.children.as_ref() {
                 for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
                     queue.push_back(TraversalNode { node: child, depth: depth + 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
-                    //log::debug!("creating child shi depth: {} ci: {}, pci: {}", depth+1, ci, pci);
                     test_count += 1;
 
 
                     let mask = (1u64 << ci) - 1;
                     let masked = bitmask & mask;
                     let test = masked.count_ones();
-                    assert_eq!(test, pci as u32);
+                    debug_assert_eq!(test, pci as u32);
                 }
             }
         }
 
-        if (depth == 1) {
-            log::debug!("{:b}, depth: {}, base child index: {}", bitmask, depth, base_child_index);
-        }
-
         bitmask_vec.push(bitmask);
         index_vec.push(base_child_index);
-
-
-
-
-
         nodes_visited += 1;
     }
 
-    fullness_normalized_total_nodes = (fullness_total / non_leaf_nodes_visited as f32) * 100f32;
+    log::debug!("base indices for depths:");
+    for (i, base_index) in base_indices_for_depth.iter().enumerate() {
+        log::debug!(" - depth {i}: {base_index}");
+    }
+
+    let sah_total = if (false) {
+        log::debug!("calculating total SAH...");
+        bitmask_vec.par_iter().map(|bitmask| {
+            let surface_area_4x4x4 = 4*4 * 6;
+            surface_area_bitmask(*bitmask) as f64 / (surface_area_4x4x4 as f64)
+        }).sum::<f64>()
+    } else {
+        -1f64
+    };
+
+
+    log::debug!("calculating total fulness...");
+    let fullness_total = bitmask_vec.par_iter().map(|bitmask| {
+        bitmask.count_ones() as f32
+    }).sum::<f32>();
+
+
+    let fullness_normalized_total_nodes = (fullness_total / nodes_visited as f32) * 100f32;
+    let sah_normalized_total_nodes = (sah_total as f32 / nodes_visited as f32) * 100f32;
 
     log::debug!("converted svo, nodes visited: {nodes_visited}, length: {}", bitmask_vec.len());
     log::debug!("metrics:");
     log::debug!(" - fullness total: {fullness_total}");
     log::debug!(" - fullness normalized: {fullness_normalized_total_nodes:.2}%");
+    log::debug!(" - sah total: {sah_total}");
+    log::debug!(" - sah normalized: {sah_normalized_total_nodes:.2}%");
 
 
     (bitmask_vec, index_vec)

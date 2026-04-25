@@ -135,8 +135,8 @@ bool dda_bitset_simple(
 
 struct DdaTraversalOutput {
     bool hit;
-    float3 world;
-    uint3 block_pos;
+    float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
+    uint3 block_pos; // this is always 100% accurate when we reach the bottom most node of the acceleration structure
     uint8_t face;
 }
 
@@ -383,6 +383,26 @@ float3 dda_shadownate(
     }
 
     return 0.0;
+}
+
+float3 get_accurate_world_position(
+    float3 ray_pos,
+    float3 ray_dir,
+) {
+    half3 inv_dir = (half3)1.0 / abs(ray_dir);
+    int8_t3 dir_sign = (int8_t3)sign(ray_dir);
+    uint16_t3 floored_pos = (uint16_t3)floor(ray_pos);
+    float3 side_dist = ((dir_sign * (floored_pos - ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    bool3 eqs = false;
+
+    eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+    side_dist += select(eqs, inv_dir, (half3)0);
+    floored_pos += select(eqs, dir_sign, (int16_t3)0);
+
+    return floored_pos;
+
+    float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir));
+    return ray_pos + distance_offset * ray_dir;
 }
 
 public static const int3[] FACE_NORMALS = {

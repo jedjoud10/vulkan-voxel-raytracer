@@ -460,8 +460,8 @@ impl InternalApp {
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
-        //self.sun = vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized();
-        self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
+        self.sun = vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized();
+        //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
         let push_constants = PushConstants2 {
             forward: vek::Mat4::from(self.movement.rotation).mul_direction(-vek::Vec3::unit_z()).with_w(0.0f32),

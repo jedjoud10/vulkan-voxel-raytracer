@@ -2,6 +2,7 @@
 #include <ray_stuff_other.slang>
 #include <lighting.slang>
 #include <pbr.slang>
+#include <noises.slang>
 
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> output;
@@ -19,6 +20,15 @@ enum DebugType: uint {
     FullHalt,
     World,
     Timer,
+}
+
+// GPTed. could not find this fuckass function online. Im so fucking stupid
+float3 heatmap(float t) {
+    return clamp(float3(
+        1.5 - abs(4.0 * t - 3.0),
+        1.5 - abs(4.0 * t - 2.0),
+        1.5 - abs(4.0 * t - 1.0)
+    ), 0.0, 1.0);
 }
 
 [shader("compute")]
@@ -41,7 +51,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     Statistics stats = Statistics(0, 0);
     //bool hit = any_hit_trace_fine(ray_pos, ray_dir, svo);
     //uint clock = getRealtimeClock().x;
-    var b = trace_shi(ray_pos, ray_dir, svo, stats);
+    var ray = trace_shi(ray_pos, ray_dir, svo, stats);
+    output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
+    //output[id.xy] = float4((ray.block_pos  % 10) / 10, 0);
+    return;
+    //var b2 = trace_shi(b.world + sun.xyz * 1, sun.xyz, svo, stats);
     /*
     //bool b = any_hit_trace_fine(ray_pos, ray_dir, svo, stats);
     uint clock2 = getRealtimeClock().x;
@@ -52,27 +66,60 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float some_number = (WaveActiveMax(stats.iterations) - stats.iterations) / 256.0;
     */
 
-    //output[id.xy] = float4(hash33(stats.buffer_fetches), 0);
-    //output[id.xy] = float4(stats.iterations / 256.0);
-    output[id.xy] = float4((b.block_pos % 4) / 4.0, 0);
+    //output[id.xy] = float4(heatmap(stats.buffer_fetches / 32.0), 0);
+    //output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
+    //output[id.xy] = float4((ray.world % 32.0) / 32.0, 0);
+    //return;
+    //output[id.xy] = float4(ray.face / 6.0);
+    
+    //ray.world = get_accurate_world_position(ray.world - ray_dir * 0.05, ray_dir);
+
+    //return;
+    //output[id.xy] = float4(b.face / 6.0);
+    //output[id.xy] = float4((b.world % 4) / 4.0, 0);
     //output[id.xy] = float4(iter / 64.0);
-    //output[id.xy] = float4(hit ? 1 : 0);
-    /*
-    GroupMemoryBarrierWithWaveSync();
-    AllMemoryBarrierWithGroupSync();
+    //output[id.xy] = float4(b2.hit ? 1 : 0);
 
     float3 color = 0.0;
     if (ray.hit) {
+        float3 world = ray.world;
         float3 normal = get_face_normal(ray.face, sign(ray_dir));
+        normal = normalize(normal);
+
         float3 diffuse = 1.0;
         float ao = 0.0;
 
         float3 d = reflect(ray_dir, normal);
         float shadow = 1.0;
         float sky_visibility = 1.0;
-        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.95, 0.0, ao, shadow, sky_visibility);
+
+        /*
+        shadow = 0.0;
+        for (int k = 0; k < 4; k++) {
+            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+            float3 dir = normalize(sun.xyz + rng * 0.05);
+            float d = 0;
+            bool t = trace_shi(world - ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
+            shadow += (t ? 0.0 : 1) / 4.0;
+        }
+        */
+
+        /*
+        sky_visibility = 0.0;
+        for (int k = 0; k < 1; k++) {
+            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+            float3 dir = normalize(d + rng * 0.05 * 0.0);
+            float d = 0;
+            bool t = trace_shi(world - ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
+            sky_visibility += (t ? 0.0 : 1) / 1.0;
+        }
+        */
+
+        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, 0.85, 0.0, ao, shadow, sky_visibility);
         CameraData camera_data = CameraData(-ray_dir);
         SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 0.8 : 0);
+
+        
         //color = normal;
         color = brdf(pbr_surface_data, camera_data, sun_data);
         //color = block_pos;
@@ -82,5 +129,5 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
     //output[id.xy] = float4(((float3)tst.block_pos % 10) / 10.0, 0);
     output[id.xy] = float4(aces(color), 0);
-    */
+    //output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
 }
