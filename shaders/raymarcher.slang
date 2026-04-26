@@ -75,10 +75,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             uint3 block_pos = ray.block_pos;
             float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
 
-            float aaa = sphere_trace_shi(world, 1.0, svo, stats);
-            //output[id.xy] = float4(aaa);
-            //return;
-
             // first ray has some debug stuff going on
             first_normals = normal;
             first_world = world;
@@ -129,6 +125,20 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 // AMBIENT OCCLUSION
                 float ao = 1.0;
                 if (AMBIENT_OCCLUSION) {
+                    ao = 0;
+                    [loop]
+                    for (int j = 0; j < 4; j++) {
+                        ao += cube_trace_shi(world + normal * (j+0.5), 0.8 + j * 0.8, svo, stats);
+                        if (ao > 2) {
+                            break;
+                        }
+                    }
+                
+                    ao = clamp(ao, 0, 2);
+                    ao *= 0.3;
+                    ao = clamp(1-ao, 0, 1);
+            
+                    /*
                     for (int k = 0; k < 4; k++) {
                         float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
 
@@ -147,6 +157,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         }
                     }
                     ao = clamp(ao, 0, 1);
+                    */
                 }
 
                 //float3 rng = (hash33((world) * 23.12123545 + i * 30.43324) * 2.0 - 1.0);
@@ -195,7 +206,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
                 */
 
-                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, aaa);
+                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow, 1.0);
                 CameraData camera_data = CameraData(-iterative_ray_dir);
 
                 // approximate sun color based on height
@@ -204,6 +215,20 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
                 temp_color = brdf(pbr_surface_data, camera_data, sun_data);
                 color *= temp_color;
+
+                /*
+                {
+                    float r = 0;
+                    float3 d = reflect(ray_dir, normal);
+                    [loop]
+                    for (int j = 0; j < 32; j++) {
+                        r += cube_trace_shi(world + d * (j+0.5), 0.2 + j * 0.1, svo, stats);
+                    }
+                
+                    color *= clamp(1-r*0.05, 0, 1);
+                }
+                */
+
                 break;
             }
         } else {

@@ -78,6 +78,10 @@ struct Args {
     /// Setting to make all shadows pixelated
     #[arg(long, default_value_t = false)]
     pixelated_shadows: bool,
+
+    /// Setting to start in fullscreen from the start. This can be toggled in-game using F5
+    #[arg(long, default_value_t = false)]
+    fullscreen: bool,
 }
 
 struct InternalApp {
@@ -150,6 +154,11 @@ impl InternalApp {
         let window = event_loop
             .create_window(Window::default_attributes())
             .unwrap();
+
+        if args.fullscreen {
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+
         window
             .set_cursor_grab(winit::window::CursorGrabMode::Confined)
             .unwrap();
@@ -229,10 +238,17 @@ impl InternalApp {
         let pool = device.create_command_pool(&pool_create_info, None).unwrap();
         log::info!("create cmd pool");
 
-        let extent = vk::Extent2D {
+        let mut extent = vk::Extent2D {
             width: 800,
             height: 600,
         };
+
+        if (args.fullscreen) {
+            extent = vk::Extent2D {
+                width: window.inner_size().width,
+                height: window.inner_size().height,
+            }
+        }
 
         let (swapchain_loader, swapchain, images, swapchain_format) = swapchain::create_swapchain(
             &instance,
@@ -621,7 +637,7 @@ impl InternalApp {
             .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
-        let descriptor_ray_inputs_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
+        let descriptor_svo_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
 
         let image_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
@@ -630,11 +646,11 @@ impl InternalApp {
             .dst_set(render_descriptor_set)
             .image_info(&descriptor_rt_image_infos);
         let buffer_descriptor_write = vk::WriteDescriptorSet::default()
-            .descriptor_count(descriptor_ray_inputs_infos.len() as u32)
+            .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(1)
             .dst_set(render_descriptor_set)
-            .buffer_info(&descriptor_ray_inputs_infos);
+            .buffer_info(&descriptor_svo_infos);
         
 
         self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write], &[]);
