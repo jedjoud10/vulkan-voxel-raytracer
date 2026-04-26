@@ -25,7 +25,8 @@ pub unsafe fn create_buffer(
     name: &str,
     flags: vk::BufferUsageFlags
 ) -> Buffer {
-    log::debug!("creating buffer {name} ({}kb)", size / 1024);
+    let bytes_formatted = bytesize::ByteSize::b(size as u64);
+    log::debug!("creating buffer {} ({})", name, bytes_formatted.display().si());
     let buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
         .usage(flags)
@@ -58,7 +59,7 @@ pub unsafe fn create_buffer(
     let device_memory = allocation.memory();
     device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
 
-    log::debug!("created buffer {name} of size {size}");
+    log::debug!("created buffer {} of size {}", name, bytes_formatted.display().si());
 
     Buffer {
         buffer, allocation

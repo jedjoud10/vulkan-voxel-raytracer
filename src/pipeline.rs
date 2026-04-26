@@ -12,6 +12,7 @@ pub struct PushConstants {
     pub position: vek::Vec4<f32>,
     pub sun: vek::Vec4<f32>,
     pub debug_type: u32,
+    pub time: f32,
 }
 
 #[repr(C)]
@@ -73,9 +74,11 @@ pub type RenderPipeline = MultiComputePipeline<1>;
 
 pub struct RenderPipelineSpecConstants {
     pub shadow_samples: u32,
-    //pub max_ray_iterations: u32,
+    pub max_ray_iterations: u32,
     pub round_normals: u32,
     pub ambient_occlusion: u32,
+    pub wavy_reflections: u32,
+
 }
 
 pub unsafe fn create_render_compute_pipeline(
@@ -130,9 +133,10 @@ pub unsafe fn create_render_compute_pipeline(
 
     let spec_constants = vec![
         SpecConstant { bytes: bytemuck::bytes_of(&constants.shadow_samples) },
-        //SpecConstant { bytes: bytemuck::bytes_of(&constants.max_ray_iterations) },
+        SpecConstant { bytes: bytemuck::bytes_of(&constants.max_ray_iterations) },
         SpecConstant { bytes: bytemuck::bytes_of(&constants.round_normals) },
         SpecConstant { bytes: bytemuck::bytes_of(&constants.ambient_occlusion) },
+        SpecConstant { bytes: bytemuck::bytes_of(&constants.wavy_reflections) },
     ];
 
     let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size, Some(spec_constants));

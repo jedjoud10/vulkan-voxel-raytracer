@@ -516,7 +516,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
 
     let mut children = [const { None }; 64];
 
-    /*
     // small chance to exit early
     if (pseudo_random(0xA23 ^ base ^ seed) % 10) < 2 {
         return Node {
@@ -525,7 +524,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
             full: false,
         }
     }
-    */
 
     let mut recursive= SmallVec::<[u8; 8]>::new();
 
@@ -547,7 +545,8 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                         recursive.push(i as u8);
                     } else {
                         // mid plate
-                        children[i] = Some(Box::new(full_node()));
+                        recursive.push(i as u8);
+                        //children[i] = Some(Box::new(full_node()));
                         //children[i] = Some(Box::new(base_plate(base - 1)));
                     }
                 }

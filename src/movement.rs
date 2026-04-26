@@ -18,6 +18,7 @@ pub struct Movement {
     pub view_matrix: vek::Mat4<f32>,
     
     fov: f32,
+    target_fov: f32,
     summed_mouse: vek::Vec2<f32>,
     local_velocity: vek::Vec2<f32>,
     velocity: vek::Vec3<f32>,
@@ -32,6 +33,7 @@ impl Movement {
 
         Self {
             fov: 80f32,
+            target_fov: 80f32,
             position: vek::Vec3::new(40.5f32, 80f32, 40.5f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
             fixed_mode_snapshot_index: None,
@@ -90,9 +92,13 @@ impl Movement {
         
 
         let uhh = 1f32 / ratio;
+        
         // TODO: fix the weird radian fov?
-        self.fov += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta));
-        self.fov = self.fov.clamp(0.05, 179.5);
+        self.target_fov += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta)) * 5f32;
+        self.target_fov = self.target_fov.clamp(0.05, 179.5);
+        self.fov += (self.target_fov-self.fov).clamp(-100f32, 100f32) * delta * 20f32;
+
+
         self.proj_matrix =
             vek::Mat4::<f32>::perspective_rh_no((self.fov).to_radians(), uhh, 0.001f32, 1000f32);
         let rot = vek::Mat4::from(self.rotation);

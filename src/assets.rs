@@ -12,20 +12,11 @@ pub fn damn<P: AsRef<Path>>(path: P) -> Vec<u8> {
     return bytes;
 }
 
-pub fn convert(inp: Vec<u8>) -> Vec<u32> {
-    let mut bytes = ManuallyDrop::new(inp);
-
-    unsafe {
-        let ptr = bytes.as_mut_ptr() as *mut u32;
-        Vec::from_raw_parts(ptr, bytes.len() / 4, bytes.capacity() / 4)
-    }
-}
-
 #[macro_export]
 macro_rules! asset {
     ($file:expr, $assets:expr) => {{
         let bytes = include_bytes!(env!($file));
-        $assets.insert($file, convert(bytes.to_vec()));
+        $assets.insert($file, bytes.to_vec());
         log::info!("loading embedded asset '{}' from compile time...", $file);
         /*
         cfg_if::cfg_if! {

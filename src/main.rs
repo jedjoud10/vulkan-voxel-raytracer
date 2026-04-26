@@ -6,7 +6,6 @@
 mod assets;
 mod debug;
 mod query;
-use assets::convert;
 use assets::damn;
 mod device;
 mod input;
@@ -58,12 +57,10 @@ struct Args {
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=16))]
     shadow_samples: u32,
 
-    /*
     /// Maximum number of rays to trace iteratively for reflections / refractions
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=8))]
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=8))]
     max_ray_iterations: u32,
-    */
-    
+
     /// Whether or not to use round spherical normals
     #[arg(long, default_value_t = false)]
     round_normals: bool,
@@ -71,6 +68,10 @@ struct Args {
     /// Whether or not to use ray traced ambient occlusion
     #[arg(long, default_value_t = false)]
     ambient_occlusion: bool,
+
+    /// Fun setting to make all mirror reflections wavey lolol
+    #[arg(long, default_value_t = false)]
+    wavy_reflections: bool,
 }
 
 struct InternalApp {
@@ -132,10 +133,13 @@ struct InternalApp {
 
 impl InternalApp {
     pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
-        let mut assets = HashMap::<&str, Vec<u32>>::new();
+        let mut assets = HashMap::<&str, Vec<u8>>::new();
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
         asset!("voxel_generate.spv", assets);
+
+        // FIXME: ugly but works fuck it
+        let assets: HashMap<&str, &[u32]> = HashMap::from_iter(assets.iter().map(|(a, b)| (*a, bytemuck::cast_slice::<u8, u32>(&b))));
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -272,9 +276,10 @@ impl InternalApp {
 
         let spec_constants = RenderPipelineSpecConstants {
             shadow_samples: args.shadow_samples,
-            //max_ray_iterations: args.max_ray_iterations,
+            max_ray_iterations: args.max_ray_iterations,
             round_normals: if args.round_normals { 1 } else { 0 },
             ambient_occlusion: if args.ambient_occlusion { 1 } else { 0 }, 
+            wavy_reflections: if args.wavy_reflections { 1 } else { 0 }, 
         };
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
@@ -656,6 +661,7 @@ impl InternalApp {
             position: self.movement.position.with_w(0f32),
             sun: self.sun.normalized().with_w(0f32),
             debug_type: self.debug_type as u32,
+            time: elapsed,
         };
 
         let raw = bytemuck::bytes_of(&push_constants);
