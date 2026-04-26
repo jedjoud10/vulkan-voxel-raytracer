@@ -15,8 +15,9 @@ StructuredBuffer<uint32_t> svo_indices_buffer;
 
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 0;
-[SpecializationConstant] const uint MAX_ITERATIONS = 1;
+//[SpecializationConstant] const uint MAX_ITERATIONS = 1;
 [SpecializationConstant] const bool ROUND_NORMALS = false;
+[SpecializationConstant] const bool AMBIENT_OCCLUSION = false;
 
 enum DebugType: uint {
     Combined,
@@ -48,138 +49,105 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
     
-    float3 color = 1.0;
-
     SparseVoxelOctree svo = SparseVoxelOctree(svo_indices_buffer, svo_bitmasks_buffer);
     Statistics stats = Statistics(0, 0);
-
+    
     float3 iterative_ray_dir = ray_dir;
     float3 iterative_ray_pos = ray_pos;
     float3 first_normals = 0.0;
     float3 first_world = 0.0;
+    
+    var ray = trace_shi<4096>(iterative_ray_pos, iterative_ray_dir, svo, stats);
+    
+    // improve the accuracy of the world position by utilizing the face (assumption we can make since we are dealing with pure cubic voxels)
+    ray.world = get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(iterative_ray_dir));
+    
+    float3 color = 1.0;
+    if (ray.hit) {
+        float3 world = ray.world;
+        uint3 block_pos = ray.block_pos;
+        float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
 
-    for (int i = 0; i < MAX_ITERATIONS; i++) {
+        // first ray has some debug stuff going on
+        first_normals = normal;
+        first_world = world;
         
-        var ray = trace_shi<4096>(iterative_ray_pos, iterative_ray_dir, svo, stats);
-        
-        // improve the accuracy of the world position by utilizing the face (assumption we can make since we are dealing with pure cubic voxels)
-        ray.world = get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(iterative_ray_dir));
-
-        float3 tmp_color = 0.0;
-        if (ray.hit) {
-            float3 world = ray.world;
-            uint3 block_pos = ray.block_pos;
-            float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
-
-            // first ray has some debug stuff going on
-            if (i == 0) {
-                first_normals = normal;
-                first_world = world;
-            }
-            
-            if (ROUND_NORMALS) {
-                normal = normalize(world - ray.block_pos - 0.5);
-            }
-
-            float3 diffuse = 1.0;
-            //float3 diffuse = per_block_unique_colour(block_pos);
-            float roughness = hash13(block_pos * float3(3.23123, 5.23423, -5.234234));
-            float metallic = hash13(block_pos * float3(132.12312, -2321.32132, 3.2132));
-            
-            float ao = 1.0;
-            ao = 0.0;
-            for (int k = 0; k < 4; k++) {
-                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                float3 dir = normalize(normal + rng * 0.25);
-                float d = 0;
-
-                var ao_ray = trace_shi<8>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats);
-
-                bool t = ao_ray.hit;
-                ao += (t ? 0.0 : 1) / 4.0;
-            }
-
-            //float3 rng = (hash33((world) * 23.12123545 + i * 30.43324) * 2.0 - 1.0);
-            //float3 dir = reflect(iterative_ray_dir, normalize(normal + rng * 0.05));
-            float3 dir = reflect(iterative_ray_dir, normal);
-            float shadow = 1.0;
-            float sky_visibility = 1.0;
-
-            // SHADOW STUFF!!!!
-            if (SHADOW_SAMPLES > 1) {
-                shadow = 0.0;
-                for (int k = 0; k < SHADOW_SAMPLES; k++) {
-                    float3 rng = (hash33((world) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                    float3 dir = normalize(sun.xyz + rng * 0.05);
-                    float d = 0;
-                    bool t = trace_shi<4096>((world) - ray_dir * 0.001 + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                    shadow += (t ? 0.0 : 1) / SHADOW_SAMPLES;
-                }
-            } else {
-                bool t = trace_shi<4096>((world) - iterative_ray_dir * 0.001 + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-                shadow = (t ? 0.0 : 1);
-            }
-
-            /*
-            // sky visibility is an extra term that is used for ambient lighting
-            sky_visibility = 0.0;
-            for (int k = 0; k < 4; k++) {
-                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                float3 dir = normalize(dir + rng * 0.25 * pow(roughness, 2));
-                float d = 0;
-                bool t = trace_shi(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
-                sky_visibility += (t ? 0.0 : 1) / 4.0;
-            }
-            sky_visibility = lerp(sky_visibility, 1, roughness);
-            */
-
-            /*
-            float3 gi = 0.0;
-            for (int k = 0; k < 4; k++) {
-                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                float3 dir = normalize(normal + rng * 0.25);
-                float d = 0;
-
-                var gi_ray = trace_shi<8>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats);
-
-                if (gi_ray.hit) {
-                    gi += per_block_unique_colour(gi_ray.block_pos) / 4.0;
-                }
-            }
-            */
-
-            PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, sky_visibility);
-            CameraData camera_data = CameraData(-iterative_ray_dir);
-            SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 1.2 : 0);
-
-            tmp_color = brdf(pbr_surface_data, camera_data, sun_data);
-
-            color *= tmp_color;
-
-            /*
-            if (roughness > 0.3) {
-                bool t = trace_shi((world) - iterative_ray_dir * 0.001 + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-                shadow += (t ? 0.0 : 1);
-
-                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, sky_visibility);
-                CameraData camera_data = CameraData(-iterative_ray_dir);
-                SunData sun_data = SunData(sun.xyz, sun.y > 0 ? 0.8 : 0);
-
-                tmp_color = brdf(pbr_surface_data, camera_data, sun_data);
-
-                color *= tmp_color;
-            } else {
-                iterative_ray_pos = world - iterative_ray_dir * 0.05 + dir * 0.05;
-                iterative_ray_dir = dir;
-                color *= diffuse;
-            }
-            */
-
-        } else {
-            tmp_color = sky(sun.xyz, iterative_ray_dir);
-            color *= tmp_color;
-            break;
+        if (ROUND_NORMALS) {
+            normal = normalize(world - ray.block_pos - 0.5);
         }
+
+        float3 diffuse = 1.0;
+        //float3 diffuse = per_block_unique_colour(block_pos);
+        float roughness = hash13(block_pos * float3(3.23123, 5.23423, -5.234234));
+        float metallic = hash13(block_pos * float3(132.12312, -2321.32132, 3.2132));
+        
+        // AMBIENT OCCLUSION
+        float ao = 1.0;
+        if (AMBIENT_OCCLUSION) {
+            for (int k = 0; k < 4; k++) {
+                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                
+                // don't affect the ray in the major axis direction
+                rng[ray.face] = 0;
+                
+                float3 dir = normalize(normal + rng);
+                float3 start = world - iterative_ray_dir * 0.05 + dir * 0.05;
+                var ao_ray = trace_shi<4>(start, dir, svo, stats);
+
+                if (ao_ray.hit) {
+                    // AO strength decreases as the hit object is further
+                    // closer objects have more influence
+                    float strength = clamp(8.0 / distance(ao_ray.world, start), 0, 1);
+                    ao -= strength / 4.0;
+                }
+            }
+            ao = clamp(ao, 0, 1);
+        }
+
+        //float3 rng = (hash33((world) * 23.12123545 + i * 30.43324) * 2.0 - 1.0);
+        //float3 dir = reflect(iterative_ray_dir, normalize(normal + rng * 0.05));
+        float3 dir = reflect(iterative_ray_dir, normal);
+        float shadow = 1.0;
+        float sky_visibility = 1.0;
+
+        // SHADOW STUFF!!!!
+        if (SHADOW_SAMPLES > 1) {
+            shadow = 0.0;
+            for (int k = 0; k < SHADOW_SAMPLES; k++) {
+                float3 rng = (hash33((world) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                float3 dir = normalize(sun.xyz + rng * 0.05);
+                float d = 0;
+                bool t = trace_shi<4096>((world) - ray_dir * 0.001 + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
+                shadow += (t ? 0.0 : 1) / SHADOW_SAMPLES;
+            }
+        } else {
+            bool t = trace_shi<4096>((world) - iterative_ray_dir * 0.001 + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
+            shadow = (t ? 0.0 : 1);
+        }
+
+        // sky visibility is an extra term that is used for ambient lighting
+        /*
+        sky_visibility = 0.0;
+        for (int k = 0; k < 4; k++) {
+            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+            float3 dir = normalize(dir + rng * 0.25 * pow(roughness, 2));
+            float d = 0;
+            bool t = trace_shi<64>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
+            sky_visibility += (t ? 0.0 : 1) / 4.0;
+        }
+        sky_visibility = lerp(sky_visibility, 1, roughness);  
+        */
+
+        PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, sky_visibility);
+        CameraData camera_data = CameraData(-iterative_ray_dir);
+
+        // approximate sun color based on height
+        float3 sun_colour = sun_colour(sun.xyz);
+        SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (1.2 * sun_colour) : 0);
+
+        color = brdf(pbr_surface_data, camera_data, sun_data);
+    } else {
+        color = sky(sun.xyz, iterative_ray_dir);
     }
 
     /*

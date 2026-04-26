@@ -58,13 +58,19 @@ struct Args {
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=16))]
     shadow_samples: u32,
 
+    /*
     /// Maximum number of rays to trace iteratively for reflections / refractions
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=8))]
     max_ray_iterations: u32,
-
+    */
+    
     /// Whether or not to use round spherical normals
     #[arg(long, default_value_t = false)]
     round_normals: bool,
+
+    /// Whether or not to use ray traced ambient occlusion
+    #[arg(long, default_value_t = false)]
+    ambient_occlusion: bool,
 }
 
 struct InternalApp {
@@ -264,7 +270,12 @@ impl InternalApp {
         let descriptor_pool = pool::create_descriptor_pool(&device);
         log::info!("created descriptor pool");
 
-        let spec_constants = RenderPipelineSpecConstants { shadow_samples: args.shadow_samples, max_ray_iterations: args.max_ray_iterations, round_normals: if args.round_normals { 1 } else { 0}  };
+        let spec_constants = RenderPipelineSpecConstants {
+            shadow_samples: args.shadow_samples,
+            //max_ray_iterations: args.max_ray_iterations,
+            round_normals: if args.round_normals { 1 } else { 0 },
+            ambient_occlusion: if args.ambient_occlusion { 1 } else { 0 }, 
+        };
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
