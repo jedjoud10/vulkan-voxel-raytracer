@@ -48,10 +48,23 @@ use crate::voxel::*;
 
 
 #[derive(clap::Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(about = "Vulkan DDA Voxel Raytracer", long_about = None)]
 struct Args {
-    #[arg(short, long, default_value_t = 1)]
+    /// Factor to use to decrease the screen resolution
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4))]
     resolution_scaling_factor: u32,
+
+    /// Number of shadow samples to use. Set to 0 to disable soft-shadows and enable hard-shadows
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=16))]
+    shadow_samples: u32,
+
+    /// Maximum number of rays to trace iteratively for reflections / refractions
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=8))]
+    max_ray_iterations: u32,
+
+    /// Whether or not to use round spherical normals
+    #[arg(long, default_value_t = false)]
+    round_normals: bool,
 }
 
 struct InternalApp {
@@ -251,7 +264,8 @@ impl InternalApp {
         let descriptor_pool = pool::create_descriptor_pool(&device);
         log::info!("created descriptor pool");
 
-        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker);
+        let spec_constants = RenderPipelineSpecConstants { shadow_samples: args.shadow_samples, max_ray_iterations: args.max_ray_iterations, round_normals: if args.round_normals { 1 } else { 0}  };
+        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
         let generate_voxel_compute_pipeline = pipeline::create_generate_voxel_compute_pipeline(&*assets["voxel_generate.spv"], &device, &debug_marker);

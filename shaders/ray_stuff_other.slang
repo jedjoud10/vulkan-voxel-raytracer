@@ -21,7 +21,6 @@ struct SparseVoxelOctree {
 
 struct Statistics {
     int iterations;
-    float poop;
     int buffer_fetches;
     int exit_type;
 }
@@ -35,7 +34,7 @@ static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 // TODO: OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE
 // 1. optimize occupancy, we still have buffer latency left to hide
 // 2. optimize raw speed, it is still relatively slow on my HW
-DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
+DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANCE : int>(
     uint32_t base_index,
     uint64_t raw,
     float3 ray_dir,
@@ -84,6 +83,9 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
         if ((bit_index < 64 && ((raw >> bit_index) & 1) == 1) || full_node) {  
             // still need an offset though, for the normals :(((
             float distance_offset = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir) * voxel_size);
+            if (distance_offset > MAX_DISTANCE) {
+                return DdaTraversalOutput(false); 
+            }
 
             // world space position of the node origin
             uint16_t3 origin = parent_world_space_origin + floored_pos * voxel_size;
@@ -99,7 +101,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
             if (full_node) {
                 if (K > 0) {
                     stats.exit_type = 2;
-                    return dda_trace_recurse<K - 1, END>(0, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
+                    return dda_trace_recurse<K - 1, END, MAX_DISTANCE>(0, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
                 } else {
                     float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
                     float3 whatever_this_is = modified_ray_pos + ray_dir * distance_offset + parent_world_space_origin / voxel_size;
@@ -127,7 +129,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
                 if (new_base_index == FULL_NODE || K <= END) {
                     stats.exit_type = 2;
-                    return dda_trace_recurse<K - 1, END>(new_base_index, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
+                    return dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
                 }
 
                 // TODO:
@@ -148,7 +150,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
                 uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
                 stats.buffer_fetches += 1;
 
-                var result = dda_trace_recurse<K - 1, END>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, false, face, stats);
+                var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, false, face, stats);
                 if (result.hit) {
                     return result;
                 }
@@ -170,7 +172,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int>(
 }
 
 
-DdaTraversalOutput trace_shi(
+DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
     float3 ray_pos,
     half3 ray_dir,
     SparseVoxelOctree svo,
@@ -178,5 +180,5 @@ DdaTraversalOutput trace_shi(
 ) {
     half3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_trace_recurse<DEPTH - 1, 0>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, false, 0, iter);
+    return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, false, 0, iter);
 }

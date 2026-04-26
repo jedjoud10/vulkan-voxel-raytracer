@@ -13,6 +13,11 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 [[vk::binding(2, 0)]]
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
+
+[SpecializationConstant] const uint SHADOW_SAMPLES = 0;
+[SpecializationConstant] const uint MAX_ITERATIONS = 1;
+[SpecializationConstant] const bool ROUND_NORMALS = false;
+
 enum DebugType: uint {
     Combined,
     Iterations,
@@ -50,10 +55,12 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
     float3 iterative_ray_dir = ray_dir;
     float3 iterative_ray_pos = ray_pos;
+    float3 first_normals = 0.0;
+    float3 first_world = 0.0;
 
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < MAX_ITERATIONS; i++) {
         
-        var ray = trace_shi(iterative_ray_pos, iterative_ray_dir, svo, stats);
+        var ray = trace_shi<4096>(iterative_ray_pos, iterative_ray_dir, svo, stats);
         
         // improve the accuracy of the world position by utilizing the face (assumption we can make since we are dealing with pure cubic voxels)
         ray.world = get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(iterative_ray_dir));
@@ -63,7 +70,16 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float3 world = ray.world;
             uint3 block_pos = ray.block_pos;
             float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
-            //normal = normalize(world - ray.block_pos - 0.5);
+
+            // first ray has some debug stuff going on
+            if (i == 0) {
+                first_normals = normal;
+                first_world = world;
+            }
+            
+            if (ROUND_NORMALS) {
+                normal = normalize(world - ray.block_pos - 0.5);
+            }
 
             float3 diffuse = 1.0;
             //float3 diffuse = per_block_unique_colour(block_pos);
@@ -71,6 +87,17 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float metallic = hash13(block_pos * float3(132.12312, -2321.32132, 3.2132));
             
             float ao = 1.0;
+            ao = 0.0;
+            for (int k = 0; k < 4; k++) {
+                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                float3 dir = normalize(normal + rng * 0.25);
+                float d = 0;
+
+                var ao_ray = trace_shi<8>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats);
+
+                bool t = ao_ray.hit;
+                ao += (t ? 0.0 : 1) / 4.0;
+            }
 
             //float3 rng = (hash33((world) * 23.12123545 + i * 30.43324) * 2.0 - 1.0);
             //float3 dir = reflect(iterative_ray_dir, normalize(normal + rng * 0.05));
@@ -78,17 +105,23 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float shadow = 1.0;
             float sky_visibility = 1.0;
 
-            /*
-            shadow = 0.0;
-            for (int k = 0; k < 4; k++) {
-                float3 rng = (hash33((world) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                float3 dir = normalize(sun.xyz + rng * 0.05);
-                float d = 0;
-                bool t = trace_shi((world) - ray_dir * 0.001 + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                shadow += (t ? 0.0 : 1) / 4.0;
+            // SHADOW STUFF!!!!
+            if (SHADOW_SAMPLES > 1) {
+                shadow = 0.0;
+                for (int k = 0; k < SHADOW_SAMPLES; k++) {
+                    float3 rng = (hash33((world) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                    float3 dir = normalize(sun.xyz + rng * 0.05);
+                    float d = 0;
+                    bool t = trace_shi<4096>((world) - ray_dir * 0.001 + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
+                    shadow += (t ? 0.0 : 1) / SHADOW_SAMPLES;
+                }
+            } else {
+                bool t = trace_shi<4096>((world) - iterative_ray_dir * 0.001 + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
+                shadow = (t ? 0.0 : 1);
             }
-            */
-            
+
+            /*
+            // sky visibility is an extra term that is used for ambient lighting
             sky_visibility = 0.0;
             for (int k = 0; k < 4; k++) {
                 float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
@@ -98,9 +131,22 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 sky_visibility += (t ? 0.0 : 1) / 4.0;
             }
             sky_visibility = lerp(sky_visibility, 1, roughness);
+            */
 
-            bool t = trace_shi((world) - iterative_ray_dir * 0.001 + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-            shadow = (t ? 0.0 : 1);
+            /*
+            float3 gi = 0.0;
+            for (int k = 0; k < 4; k++) {
+                float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
+                float3 dir = normalize(normal + rng * 0.25);
+                float d = 0;
+
+                var gi_ray = trace_shi<8>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats);
+
+                if (gi_ray.hit) {
+                    gi += per_block_unique_colour(gi_ray.block_pos) / 4.0;
+                }
+            }
+            */
 
             PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, sky_visibility);
             CameraData camera_data = CameraData(-iterative_ray_dir);
@@ -136,6 +182,14 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
         }
     }
 
+    /*
+    Combined,
+    Iterations,
+    BufferFetches,
+    Normals,
+    World,
+    ExitType,
+    */
 
     switch (debug_type) {
         case DebugType::Combined:
@@ -147,17 +201,15 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
         case DebugType::BufferFetches:
             output[id.xy] = float4(heatmap(stats.buffer_fetches / 256.0), 0);
             break;
+        case DebugType::Normals:
+            output[id.xy] = float4(first_normals, 0);
+            break;
+        case DebugType::World:
+            output[id.xy] = float4((first_world % 10) / 10.0, 0);
+            break;
         case DebugType::ExitType:
             output[id.xy] = float4(stats.exit_type / 3.0);
             break;
-        /*
-        case DebugType::World:
-            output[id.xy] = float4((ray.world % 10) / 10.0, 0);
-            break;
-        case DebugType::Normals:
-            output[id.xy] = float4(get_face_normal(ray.face, sign(ray_dir)), 0);
-            break;
-        */
         default:
             break;
     }

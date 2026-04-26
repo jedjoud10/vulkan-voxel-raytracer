@@ -45,6 +45,10 @@ pub struct SingleEntryPointWrapper {
     pub pipeline_layout: vk::PipelineLayout,
 }
 
+pub struct SpecConstant<'a> {
+    pub bytes: &'a [u8],
+}
+
 pub struct MultiComputePipeline<const N: usize> {
     pub module: vk::ShaderModule,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
@@ -67,10 +71,17 @@ pub type VoxelGeneratePipeline = MultiComputePipeline<2>;
 pub type VoxelTickPipeline = MultiComputePipeline<4>;
 pub type RenderPipeline = MultiComputePipeline<1>;
 
+pub struct RenderPipelineSpecConstants {
+    pub shadow_samples: u32,
+    pub max_ray_iterations: u32,
+    pub round_normals: u32,
+}
+
 pub unsafe fn create_render_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
     binder: &Option<ash::ext::debug_utils::Device>,
+    constants: RenderPipelineSpecConstants,
 ) -> RenderPipeline {
     let render_compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)
@@ -115,7 +126,14 @@ pub unsafe fn create_render_compute_pipeline(
     let render_compute_descriptor_set_layouts = [render_compute_descriptor_set_layout];
 
     let push_constant_size = Some(size_of::<PushConstants>());
-    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size);
+
+    let spec_constants = vec![
+        SpecConstant { bytes: bytemuck::bytes_of(&constants.shadow_samples) },
+        SpecConstant { bytes: bytemuck::bytes_of(&constants.max_ray_iterations) },
+        SpecConstant { bytes: bytemuck::bytes_of(&constants.round_normals) }
+    ];
+
+    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size, Some(spec_constants));
     
     return MultiComputePipeline {
         module: render_compute_shader_module,
@@ -195,10 +213,10 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
     crate::debug::set_object_name(compute_descriptor_test_set_layout, binder, "tick voxel compute descriptor set layout");
 
     let push_constant_size = Some(size_of::<PushConstants2>());
-    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unwrap", compute_descriptor_test_set_layout, push_constant_size);
-    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unpack", compute_descriptor_test_set_layout, push_constant_size);
-    let tick_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout, push_constant_size);
-    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "copyDispatchSize", compute_descriptor_test_set_layout, push_constant_size);
+    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unwrap", compute_descriptor_test_set_layout, push_constant_size, None);
+    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unpack", compute_descriptor_test_set_layout, push_constant_size, None);
+    let tick_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout, push_constant_size, None);
+    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "copyDispatchSize", compute_descriptor_test_set_layout, push_constant_size, None);
     
     return MultiComputePipeline {
         module: compute_shader_module,
@@ -207,14 +225,43 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
     }
 }
 
-pub unsafe fn create_single_entry_point_pipeline(device: &ash::Device, binder: &Option<ash::ext::debug_utils::Device>, compute_shader_module: vk::ShaderModule, entry_point_name: &str, descriptor_set_layout: vk::DescriptorSetLayout, push_constant_size: Option<usize>) -> SingleEntryPointWrapper {
+pub unsafe fn create_single_entry_point_pipeline(
+    device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
+    compute_shader_module: vk::ShaderModule,
+    entry_point_name: &str,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    push_constant_size: Option<usize>,
+    spec_constants: Option<Vec<SpecConstant>>
+) -> SingleEntryPointWrapper {
     let string = CString::from_str(entry_point_name).unwrap();
+
+    let mut specialization_entries = Vec::<vk::SpecializationMapEntry>::new();
+
+    let mut data = Vec::<u8>::new();
+    if let Some(spec_constants) = spec_constants {
+        let mut last_offset = 0u32;
+        for (i, spec) in spec_constants.iter().enumerate() {
+            specialization_entries.push(vk::SpecializationMapEntry::default()
+                .constant_id(i as u32)
+                .offset(last_offset)
+                .size(spec.bytes.len())
+            );
+            data.extend_from_slice(spec.bytes);
+            last_offset += spec.bytes.len() as u32;
+        }
+    }
+
+    let specialization_info = vk::SpecializationInfo::default()
+        .map_entries(&specialization_entries)
+        .data(&data);
 
     log::info!("creating single entry point pipline for {entry_point_name}. pc range: {push_constant_size:?}");
     let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
         .flags(vk::PipelineShaderStageCreateFlags::empty())
         .name(string.as_c_str())
         .stage(vk::ShaderStageFlags::COMPUTE)
+        .specialization_info(&specialization_info)
         .module(compute_shader_module);
     
     let descriptor_set_layouts: [vk::DescriptorSetLayout; 1] = [descriptor_set_layout];
@@ -311,8 +358,8 @@ pub unsafe fn create_generate_voxel_compute_pipeline(
 
     crate::debug::set_object_name(compute_descriptor_test_set_layout, binder, "generate voxel compute descriptor set layout");
 
-    let generate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout, None);
-    let propagate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "propagateMipMaps", compute_descriptor_test_set_layout, None);
+    let generate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout, None, None);
+    let propagate_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "propagateMipMaps", compute_descriptor_test_set_layout, None, None);
     
     return MultiComputePipeline {
         module: compute_shader_module,
