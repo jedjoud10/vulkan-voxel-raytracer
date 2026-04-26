@@ -112,6 +112,12 @@ public float3 brdf(
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
 	float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), surface.roughness, skyColor, groundColor);
+	
+	// make the environment specular reflect the actual sky as the roughness decreases
+	float smoothness = 1-surface.roughness;
+	environment_specular = lerp(environment_specular, sky(light.direction, -reflect(camera.view, surface.normal), true), smoothstep(0.8, 1.0, smoothness));
+
+
 	//float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
 	float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility * surface.sky_visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04

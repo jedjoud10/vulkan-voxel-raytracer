@@ -14,11 +14,12 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
 
-[SpecializationConstant] const uint SHADOW_SAMPLES = 0;
+[SpecializationConstant] const uint SHADOW_SAMPLES = 1;
 [SpecializationConstant] const uint MAX_ITERATIONS = 2;
 [SpecializationConstant] const bool ROUND_NORMALS = false;
 [SpecializationConstant] const bool AMBIENT_OCCLUSION = false;
 [SpecializationConstant] const bool WAVY_REFLECTIONS = false;
+[SpecializationConstant] const bool PIXELATED_SHADOWS = false;
 
 
 enum DebugType: uint {
@@ -57,6 +58,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     
     float3 iterative_ray_dir = ray_dir;
     float3 iterative_ray_pos = ray_pos;
+
     float3 first_normals = 0.0;
     float3 first_world = 0.0;
     
@@ -72,6 +74,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float3 world = ray.world;
             uint3 block_pos = ray.block_pos;
             float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
+
+            float aaa = sphere_trace_shi(world, 1.0, svo, stats);
+            //output[id.xy] = float4(aaa);
+            //return;
 
             // first ray has some debug stuff going on
             first_normals = normal;
@@ -150,7 +156,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 float sky_visibility = 1.0;
 
                 // SHADOW STUFF!!!!
-                float3 shadow_ray_start = floor(world * 4) / 4.0;
+                float3 shadow_ray_start = world;
+                if (PIXELATED_SHADOWS) {
+                    shadow_ray_start = floor(world * 4) / 4.0;
+                }
                 if (SHADOW_SAMPLES > 1) {
                     shadow = 0.0;
                     for (int k = 0; k < SHADOW_SAMPLES; k++) {
@@ -160,9 +169,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
                         shadow += (t ? 0.0 : 1) / SHADOW_SAMPLES;
                     }
-                } else {
+                } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
                     shadow = (t ? 0.0 : 1);
+                } else {
+                    shadow = 1.0;
                 }
 
                 /*
@@ -184,7 +195,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
                 */
 
-                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, sky_visibility);
+                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, ao, shadow, aaa);
                 CameraData camera_data = CameraData(-iterative_ray_dir);
 
                 // approximate sun color based on height

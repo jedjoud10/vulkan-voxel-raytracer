@@ -74,7 +74,7 @@ fn main() {
 
     let session_options = CompilerOptions::default()
         .optimization(OptimizationLevel::Maximal)
-        .debug_information(DebugInfoLevel::None)
+        .debug_information(DebugInfoLevel::Standard)
         .obfuscate(false)
         .no_mangle(true)
         .disable_specialization(false)

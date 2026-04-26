@@ -150,7 +150,11 @@ pub unsafe fn write_to_buffer(
 
         let device_memory = allocation.memory();
         device.bind_buffer_memory(staging_buffer, device_memory, 0).unwrap();
-        allocation.mapped_slice_mut().unwrap().copy_from_slice(bytes);
+        
+        let dst_slice = allocation.mapped_slice_mut().unwrap();
+
+        // FIXME: for some reason on nvidia the slice has different size? shouldn't gpu_allocator handle this type of stuff...
+        dst_slice[..(bytes.len())].copy_from_slice(bytes);
 
         let region = vk::BufferCopy2::default()
             .dst_offset(0)

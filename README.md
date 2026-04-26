@@ -52,7 +52,7 @@
         + generating the "ray"s takes a massive performance hit because the compute shader is extremely short with a LOT of latency that it can't hide
     - Got rid of this, we will do the tracing for primary rays directly in the MAIN shader
 ## Resources Used
-- Friend & Folkd from the Order of The Simulation Discord Server. Very smart people!
+- Friend & Folk from the Order of The Simulation Discord Server. Very smart people!
 - https://dubiousconst282.github.io/2024/10/03/voxel-ray-tracing/
 - https://www.shadertoy.com/view/lfyGRW
 - https://www.shadertoy.com/view/lc3SDX

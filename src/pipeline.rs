@@ -72,13 +72,15 @@ pub type VoxelGeneratePipeline = MultiComputePipeline<2>;
 pub type VoxelTickPipeline = MultiComputePipeline<4>;
 pub type RenderPipeline = MultiComputePipeline<1>;
 
+#[derive(Pod, Zeroable, Copy, Clone)]
+#[repr(C)]
 pub struct RenderPipelineSpecConstants {
     pub shadow_samples: u32,
     pub max_ray_iterations: u32,
     pub round_normals: u32,
     pub ambient_occlusion: u32,
     pub wavy_reflections: u32,
-
+    pub pixelated_shadows: u32,
 }
 
 pub unsafe fn create_render_compute_pipeline(
@@ -94,6 +96,7 @@ pub unsafe fn create_render_compute_pipeline(
     let render_compute_shader_module = device
         .create_shader_module(&render_compute_shader_module_create_info, None)
         .unwrap();
+    log::debug!("created shader module");
 
     crate::debug::set_object_name(render_compute_shader_module, binder, "render compute shader module");
 
@@ -125,19 +128,16 @@ pub unsafe fn create_render_compute_pipeline(
     let render_compute_descriptor_set_layout = device
         .create_descriptor_set_layout(&render_descriptor_set_layout_create_info, None)
         .unwrap();
+    log::debug!("created descriptor set layout");
 
     crate::debug::set_object_name(render_compute_descriptor_set_layout, binder, "render compute descriptor set layout");
     let render_compute_descriptor_set_layouts = [render_compute_descriptor_set_layout];
 
     let push_constant_size = Some(size_of::<PushConstants>());
 
-    let spec_constants = vec![
-        SpecConstant { bytes: bytemuck::bytes_of(&constants.shadow_samples) },
-        SpecConstant { bytes: bytemuck::bytes_of(&constants.max_ray_iterations) },
-        SpecConstant { bytes: bytemuck::bytes_of(&constants.round_normals) },
-        SpecConstant { bytes: bytemuck::bytes_of(&constants.ambient_occlusion) },
-        SpecConstant { bytes: bytemuck::bytes_of(&constants.wavy_reflections) },
-    ];
+    // FIXME: this assumes that spec constant fields are ALL u32s
+    let spec_constant_bytes = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&constants));
+    let spec_constants = spec_constant_bytes.into_iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect();
 
     let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size, Some(spec_constants));
     

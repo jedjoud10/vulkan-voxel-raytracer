@@ -21,6 +21,7 @@ mod voxel;
 mod ticker;
 mod buffer;
 mod rays;
+mod statistics;
 
 use ash;
 use ash::vk;
@@ -39,6 +40,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
+use statistics::Statistics;
 
 use crate::buffer::*;
 use crate::pipeline::*;
@@ -53,7 +55,7 @@ struct Args {
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4))]
     resolution_scaling_factor: u32,
 
-    /// Number of shadow samples to use. Set to 0 to disable soft-shadows and enable hard-shadows
+    /// Number of shadow samples to use. Set to 0 to disable shadows completely. Set to 1 to use hard-shadows.
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=16))]
     shadow_samples: u32,
 
@@ -72,9 +74,15 @@ struct Args {
     /// Fun setting to make all mirror reflections wavey lolol
     #[arg(long, default_value_t = false)]
     wavy_reflections: bool,
+
+    /// Setting to make all shadows pixelated
+    #[arg(long, default_value_t = false)]
+    pixelated_shadows: bool,
 }
 
 struct InternalApp {
+    frame_count: u64,
+
     input: Input,
     movement: Movement,
 
@@ -126,9 +134,7 @@ struct InternalApp {
     sun: vek::Vec3<f32>,
     debug_type: u32,
     args: Args,
-
-
-    delta_ms_buffer: [f64; 8],
+    stats: Statistics,
 }
 
 impl InternalApp {
@@ -176,14 +182,14 @@ impl InternalApp {
             })
             .filter_map(|(a, b)| b.map(|val| (a, val)))
             .collect::<Vec<(vk::PhysicalDevice, u32)>>();
-        physical_device_candidates.sort_by(|(_, a), (_, b)| a.cmp(b));
+        physical_device_candidates.sort_by_key(|(_, score)| *score);
 
         if physical_device_candidates.is_empty() {
             log::error!("no physical device was chosen!");
             panic!();
         }
 
-        let physical_device = physical_device_candidates[0].0;
+        let physical_device = physical_device_candidates.last().unwrap().0;
         let mut physical_device_properties = vk::PhysicalDeviceProperties2::default();
         instance.get_physical_device_properties2(physical_device, &mut physical_device_properties);
         let physical_device_name = physical_device_properties.properties.device_name_as_c_str().unwrap().to_str().unwrap();
@@ -280,6 +286,7 @@ impl InternalApp {
             round_normals: if args.round_normals { 1 } else { 0 },
             ambient_occlusion: if args.ambient_occlusion { 1 } else { 0 }, 
             wavy_reflections: if args.wavy_reflections { 1 } else { 0 }, 
+            pixelated_shadows: if args.pixelated_shadows { 1 } else { 0 }, 
         };
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
@@ -349,6 +356,7 @@ impl InternalApp {
         */
 
         Self {
+            frame_count: 0,
             input: Default::default(),
             movement: Movement::new(),
             window,
@@ -389,7 +397,7 @@ impl InternalApp {
             visible_surface_indirect_dispatch_buffer,
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
             debug_type: 0,
-            delta_ms_buffer: [0f64; 8],
+            stats: Default::default(),
             args,
             //ray_trace_buffers,
         }
@@ -798,14 +806,16 @@ impl InternalApp {
         let mut timestamps = [0u64; 2];
         self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).unwrap();
         let delta_in_ms = ((timestamps[1] - timestamps[0]) as f64 * self.timestamp_period as f64) / 1000000.0f64;
-        self.delta_ms_buffer.rotate_right(1);
-        self.delta_ms_buffer[0] = delta_in_ms;
+        self.stats.push_query_timings(delta_in_ms);
+        self.stats.end_of_frame(self.frame_count);
 
         /*
         if let Some(desc_temp) = desc_temp{
             self.device.free_descriptor_sets(self.descriptor_pool, &[desc_temp]).unwrap();
         }
         */
+
+        self.frame_count += 1;
     }
 
     pub unsafe fn destroy(mut self) {
@@ -940,9 +950,13 @@ impl ApplicationHandler for App {
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyP)).pressed() {
-                    let render_time_avg = inner.delta_ms_buffer.iter().sum::<f64>() / inner.delta_ms_buffer.len() as f64;
+                    let render_time_avg = inner.stats.get_average_in_ms();
                     let delta_ms = delta * 1000f32;
-                    println!("CPU delta: {delta_ms:.3}, Main Compute Render Time Average: {render_time_avg:.3}");
+                    log::info!("CPU delta: {delta_ms:.3}, Main Compute Render Time Average: {render_time_avg:.3}");
+                }
+
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyL)).pressed() {
+                    inner.stats.start_benchmarking(inner.frame_count);
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {

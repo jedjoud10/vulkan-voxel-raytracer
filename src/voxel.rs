@@ -545,8 +545,8 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> Node {
                         recursive.push(i as u8);
                     } else {
                         // mid plate
-                        recursive.push(i as u8);
-                        //children[i] = Some(Box::new(full_node()));
+                        //recursive.push(i as u8);
+                        children[i] = Some(Box::new(full_node()));
                         //children[i] = Some(Box::new(base_plate(base - 1)));
                     }
                 }
