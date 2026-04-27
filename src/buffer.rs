@@ -23,7 +23,7 @@ pub unsafe fn create_buffer(
     size: usize,
     binder: &Option<ash::ext::debug_utils::Device>,
     name: &str,
-    flags: vk::BufferUsageFlags
+    flags: vk::BufferUsageFlags,
 ) -> Buffer {
     let bytes_formatted = bytesize::ByteSize::b(size as u64);
     log::debug!("creating buffer {} ({})", name, bytes_formatted.display().si());
@@ -57,8 +57,8 @@ pub unsafe fn create_buffer(
 
     
     let device_memory = allocation.memory();
-    device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
-
+    device.bind_buffer_memory(buffer, device_memory, allocation.offset()).unwrap();
+    
     log::debug!("created buffer {} of size {}", name, bytes_formatted.display().si());
 
     Buffer {
@@ -107,10 +107,9 @@ pub unsafe fn write_to_buffer(
     queue: vk::Queue,
     dst_buffer: vk::Buffer,
     allocator: &mut Allocator,
-    data: &[u32]
+    bytes: &[u8]
 ) {
-    let bytes: &[u8] = bytemuck::cast_slice(data);
-
+    let start = std::time::Instant::now();
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
         .level(vk::CommandBufferLevel::PRIMARY)
@@ -149,7 +148,7 @@ pub unsafe fn write_to_buffer(
             .unwrap();
 
         let device_memory = allocation.memory();
-        device.bind_buffer_memory(staging_buffer, device_memory, 0).unwrap();
+        device.bind_buffer_memory(staging_buffer, device_memory, allocation.offset()).unwrap();
         
         let dst_slice = allocation.mapped_slice_mut().unwrap();
 
@@ -188,6 +187,9 @@ pub unsafe fn write_to_buffer(
         allocator.free(allocation).unwrap();
         device.destroy_buffer(staging_buffer, None);
     }
+
+    let end = std::time::Instant::now();
+    log::debug!("buffer write took {}ms", (end-start).as_millis());
 }
 
 

@@ -66,7 +66,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
     [loop]
     for (int i = 0; i < MAX_ITERATIONS; i++) {
-        var ray = trace_shi<4096>(iterative_ray_pos, iterative_ray_dir, svo, stats);
+        var ray = trace_shi<int.maxValue>(iterative_ray_pos, iterative_ray_dir, svo, stats);
         
         // improve the accuracy of the world position by utilizing the face (assumption we can make since we are dealing with pure cubic voxels)
         ray.world = get_accurate_world_position_with_face(ray.world, ray.block_pos, ray.face, sign(iterative_ray_dir));
@@ -119,7 +119,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     new_normal = normalize(snoise(world * 0.85 + time) * 0.05 + normal);
                 }
 
-                float3 dir = reflect(iterative_ray_dir, new_normal);
+                float3 dir = reflect(iterative_ray_dir, new_normal + (hash33(world * float3(3.2312, -80.4098361, 94.309483)) * 2.0 - 1.0) * 0.01 * roughness);
                 iterative_ray_dir = dir;
                 iterative_ray_pos = world + dir * 0.001;
                 color *= diffuse * metallic;

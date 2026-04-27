@@ -88,8 +88,8 @@ struct PerFrameData {
     swapchain_image: vk::Image,
     rt_image: vk::Image,
     rt_image_allocation: Option<Allocation>,
-    begin_semaphore: vk::Semaphore,
-    end_semaphore: vk::Semaphore,
+    present_complete_semaphore: vk::Semaphore,
+    render_finished_semaphore: vk::Semaphore,
     end_fence: vk::Fence,
     cmd: vk::CommandBuffer,
     all_descriptor_sets_for_frame: Vec<vk::DescriptorSet>,
@@ -127,25 +127,16 @@ struct InternalApp {
     pool: vk::CommandPool,
 
     render_compute_pipeline: RenderPipeline,
-    
-    /*
-    generate_voxel_compute_pipeline: VoxelGeneratePipeline,
-    tick_voxel_compute_pipeline: VoxelTickPipeline,
-    voxel_image: VoxelImage,
-    voxel_surface_index_image: (vk::Image, Allocation, vk::ImageView),
-    voxel_surface_buffer: Buffer,
-    voxel_surface_counter_buffer: Buffer,
-    visible_surface_buffer: Buffer,
-    visible_surface_counter_buffer: Buffer,
-    visible_surface_indirect_dispatch_buffer: Buffer,
-    */
 
     query_pool: vk::QueryPool,
     timestamp_period: f32,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
+    
     svo: SparseVoxelOctree,
+    svo_constructor: TopDownASConstructor,
+
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
     debug_type: u32,
@@ -310,44 +301,16 @@ impl InternalApp {
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
-        /*
-        let generate_voxel_compute_pipeline = pipeline::create_generate_voxel_compute_pipeline(&*assets["voxel_generate.spv"], &device, &debug_marker);
-        log::info!("created voxel generate compute pipeline");
-
-        let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device, &debug_marker);
-        log::info!("created voxel tick compute pipeline");
-
-        let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R64_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
-        log::info!("created voxel image");
-        */
-
-        let svo = voxel::create_sparse_voxel_octree(&device, &mut allocator, &debug_marker, "sparse voxel octree");
+        let (svo, svo_constructor) = voxel::create_sparse_voxel_octree(
+            &device,
+            &mut allocator,
+            &debug_marker,
+            queue,
+            pool,
+            descriptor_pool,
+            queue_family_index
+        );
         log::info!("created sparse voxel octree buffers");
-
-        /*
-        let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
-        log::info!("created voxel surface indices image");
-        */
-
-        const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
-        const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
-
-        /*
-        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-        log::info!("created voxel surface buffer");
-        
-        let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        log::info!("created voxel surface counter");
-
-        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
-        log::info!("created visible surfaces buffer");
-
-        let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        log::info!("created visible surfaces counter");
-
-        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER);
-        log::info!("created visible surfaces indirect buffer");
-        */
 
         log::info!("creating frames in flight structures...");
         let mut frames_in_flight = Vec::<PerFrameData>::new();
@@ -410,8 +373,8 @@ impl InternalApp {
                 swapchain_image,
                 rt_image,
                 rt_image_allocation: Some(rt_image_allocation),
-                begin_semaphore,
-                end_semaphore,
+                present_complete_semaphore: begin_semaphore,
+                render_finished_semaphore: end_semaphore,
                 end_fence,
                 cmd,
                 all_descriptor_sets_for_frame,
@@ -421,37 +384,8 @@ impl InternalApp {
             });
         }
 
-        /*
-        voxel::generate_voxel_image(
-            &device,
-            queue,
-            pool,
-            descriptor_pool,
-            queue_family_index,
-            &voxel_image,
-            voxel_surface_index_image.0,
-            voxel_surface_index_image.2,
-            &generate_voxel_compute_pipeline,            
-        );
-        */
-
-        voxel::convert_mips_svo(
-            &device,
-            &mut allocator,
-            queue,
-            pool,
-            descriptor_pool,
-            queue_family_index,
-            &svo
-        );
-
         let query_pool = query::create_query_pool(&device);
         let timestamp_period = physical_device_properties.properties.limits.timestamp_period;
-
-        /*
-        let ray_trace_buffers = rays::create_ray_trace_buffers(&device, &mut allocator, &debug_marker);
-        log::info!("created ray trace buffers");
-        */
 
         Self {
             frame_count: 0,
@@ -478,50 +412,33 @@ impl InternalApp {
             timestamp_period,
             allocator,
             svo,
+            svo_constructor,
             frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
-            /*
-            generate_voxel_compute_pipeline,
-            tick_voxel_compute_pipeline,
-            voxel_image,
-            voxel_surface_buffer,
-            voxel_surface_index_image,
-            voxel_surface_counter_buffer,
-            visible_surface_buffer,
-            visible_surface_counter_buffer,
-            visible_surface_indirect_dispatch_buffer,
-            */
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
             debug_type: 0,
             stats: Default::default(),
             args,
-            //ray_trace_buffers,
         }
     }
 
     pub unsafe fn click(&mut self, add: bool) {
-        /*
-        let forward = self.movement.forward().with_w(0.0f32);
-        let position = (self.movement.position + forward * 2.0).map(|x| x as u32);
+        let position = (self.movement.forward() * 5.0f32 + self.movement.position).floor().as_::<u32>();
 
+        self.svo_constructor.set(position, add);
+        let root_node = &self.svo_constructor.root;
 
-        voxel::update_voxel(
-            &self.device,
-            &mut self.allocator,
-            self.queue,
-            self.pool,
-            &self.voxel_image,
-            true,
-            /*voxel::Voxel {
-                active: true,
-                reflective: self.ticker.count % 4 == 0,
-                refractive: self.ticker.count % 4 == 1,
-                placed: true,
-            }.into_raw(),
-            */
-            position,
-        )
-        */
+        // FIXME: very very bad! does a full rebuild of the AS even though we might have only modified a few nodes here and there
+        // unfortunately, as the AS is using packed buffer and packed nodes, *adding* a new node will require you to shift all nodes after that
+        // depending on the child indexing order, this could be very cheap (i.e inserting near the end) or very expensive (i.e inserting near the front and having to shift all elements after that)
+        let (bitmasks, indices) = voxel::convert_to_buffers(root_node.clone());
+        
+        let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(bitmasks.as_slice());
+        let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(indices.as_slice());
+
+        // TODO: use the dedicated per-frame command buffer and a scratch buffer and avoid doing the device.wait_idle() inside these calls
+        buffer::write_to_buffer(&self.device, self.pool, self.queue, self.svo.bitmask_buffer.buffer, &mut self.allocator, bitmasks_buffer_bytes);
+        buffer::write_to_buffer(&self.device, self.pool, self.queue, self.svo.index_buffer.buffer, &mut self.allocator, indices_buffer_bytes);
     }
 
     pub unsafe fn resize(&mut self, width: u32, height: u32) {
@@ -628,20 +545,19 @@ impl InternalApp {
             swapchain_image,
             rt_image,
             rt_image_allocation,
-            begin_semaphore,
-            end_semaphore,
+            present_complete_semaphore,
             end_fence,
             cmd,
             all_descriptor_sets_for_frame,
             src_image_view,
             dst_image_view,
+            ..
         } = &self.frames_in_flight[frame_index as usize];
 
         let cmd = *cmd;
         let swapchain_image = *swapchain_image;
         let rt_image = *rt_image;
-        let begin_semaphore = *begin_semaphore;
-        let end_semaphore = *end_semaphore;
+        let present_complete_semaphores = [*present_complete_semaphore];
         let end_fence = *end_fence;
         let src_image_view = *src_image_view;
         let dst_image_view = *dst_image_view;
@@ -655,15 +571,17 @@ impl InternalApp {
 
         self.device.reset_fences(&[end_fence]).unwrap();
 
-        let (index, _) = self
+        let (acquired_swapchain_image_index, _) = self
             .swapchain_loader
             .acquire_next_image(
                 self.swapchain,
                 u64::MAX,
-                begin_semaphore,
+                *present_complete_semaphore,
                 vk::Fence::null(),
             )
             .unwrap();
+
+        let render_finished_semaphore = [self.frames_in_flight[acquired_swapchain_image_index as usize].render_finished_semaphore];
         
         let dst_image = swapchain_image;
         let src_image= rt_image;
@@ -878,25 +796,23 @@ impl InternalApp {
         self.device.end_command_buffer(cmd).unwrap();
 
         let cmds = [cmd];
-        let rendered_semaphores = [end_semaphore];
-        let acquire_sempahores = [begin_semaphore];
         let wait_masks =
-            [vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::ALL_GRAPHICS];
+            [vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::ALL_GRAPHICS | vk::PipelineStageFlags::COMPUTE_SHADER];
         let submit_info = vk::SubmitInfo::default()
             .command_buffers(&cmds)
-            .signal_semaphores(&rendered_semaphores)
+            .signal_semaphores(&render_finished_semaphore)
             .wait_dst_stage_mask(&wait_masks)
-            .wait_semaphores(&acquire_sempahores);
+            .wait_semaphores(&present_complete_semaphores);
         self.device
             .queue_submit(self.queue, &[submit_info], end_fence)
             .unwrap();
 
         let swapchains = [self.swapchain];
-        let indices = [index];
+        let indices = [acquired_swapchain_image_index];
         let present_info = vk::PresentInfoKHR::default()
             .swapchains(&swapchains)
             .image_indices(&indices)
-            .wait_semaphores(&rendered_semaphores);
+            .wait_semaphores(&render_finished_semaphore);
 
         self.swapchain_loader
             .queue_present(self.queue, &present_info)
@@ -911,6 +827,10 @@ impl InternalApp {
         
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
+
+        // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
+        // remove this when shit is fixed pls thx
+        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
     }
 
     pub unsafe fn destroy(mut self) {
@@ -976,8 +896,8 @@ impl InternalApp {
             self.allocator.free(frame.rt_image_allocation.unwrap()).unwrap();
             log::info!("destroyed render target image frame data");
 
-            self.device.destroy_semaphore(frame.begin_semaphore, None);
-            self.device.destroy_semaphore(frame.end_semaphore, None);
+            self.device.destroy_semaphore(frame.present_complete_semaphore, None);
+            self.device.destroy_semaphore(frame.render_finished_semaphore, None);
             self.device.destroy_fence(frame.end_fence, None);
             log::info!("destroyed semaphores and fences frame data");            
 

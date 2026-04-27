@@ -2,6 +2,8 @@ use std::ffi::{CStr, CString};
 
 use ash::vk;
 
+pub const FRAMES_IN_FLIGHT: u32 = 3;
+
 pub unsafe fn create_swapchain(
     instance: &ash::Instance,
     surface_loader: &ash::khr::surface::Instance,
@@ -19,6 +21,13 @@ pub unsafe fn create_swapchain(
     let surface_capabilities = surface_loader
         .get_physical_device_surface_capabilities(physical_device, surface_khr)
         .unwrap();
+
+    let mut frames_in_flight = FRAMES_IN_FLIGHT;
+    if frames_in_flight < surface_capabilities.min_image_count || frames_in_flight > surface_capabilities.max_image_count {
+        log::error!("could not use specific frame in flight count: {FRAMES_IN_FLIGHT}, reverting to swapchain minimum of {}", surface_capabilities.min_image_count);
+        frames_in_flight = surface_capabilities.min_image_count;
+    }
+
     let present_modes: Vec<vk::PresentModeKHR> = surface_loader
         .get_physical_device_surface_present_modes(physical_device, surface_khr)
         .unwrap();
@@ -32,7 +41,7 @@ pub unsafe fn create_swapchain(
         .unwrap();
     let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
         .surface(surface_khr)
-        .min_image_count(surface_capabilities.min_image_count)
+        .min_image_count(frames_in_flight)
         .image_format(surface_formats[0].format)
         .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
         .image_extent(extent)
