@@ -63,6 +63,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float3 first_world = 0.0;
     
     float3 color = 1.0;
+
+    [loop]
     for (int i = 0; i < MAX_ITERATIONS; i++) {
         var ray = trace_shi<4096>(iterative_ray_pos, iterative_ray_dir, svo, stats);
         
@@ -173,6 +175,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
                 if (SHADOW_SAMPLES > 1) {
                     shadow = 0.0;
+                    [loop]
                     for (int k = 0; k < SHADOW_SAMPLES; k++) {
                         float3 rng = (hash33((shadow_ray_start) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
                         float3 dir = normalize(sun.xyz + rng * 0.025);
@@ -221,8 +224,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     float r = 0;
                     float3 d = reflect(ray_dir, normal);
                     [loop]
-                    for (int j = 0; j < 32; j++) {
-                        r += cube_trace_shi(world + d * (j+0.5), 0.2 + j * 0.1, svo, stats);
+                    for (int j = 0; j < 64; j++) {
+                        r += cube_trace_shi(world + d * (j+0.5) * 0.2, 0.1 + pow(j * 0.2, 1.3), svo, stats);
+                        if (r > 0.8) {
+                            break;
+                        }
                     }
                 
                     color *= clamp(1-r*0.05, 0, 1);

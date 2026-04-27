@@ -94,11 +94,11 @@ bool is_solid_recurse<let K: int>(
 DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANCE : int>(
     uint32_t base_index,
     uint64_t raw,
-    half3 ray_dir,
+    float3 ray_dir,
     float3 ray_pos,
-    half3 inv_dir,
+    float3 inv_dir,
     int8_t3 dir_sign,
-    float16_t distance,
+    float distance,
     SparseVoxelOctree svo,
     uint16_t3 parent_world_space_origin,
     uint8_t face,
@@ -137,8 +137,8 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
         [branch]
         if (base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1)) {  
             // still need an offset though, for the normals :(((
-            float16_t distance_offset = (float16_t)length(select(eqs, (side_dist - inv_dir) * voxel_size, 0));
-            float16_t distance_to_surface = distance + distance_offset;
+            float distance_offset = length(select(eqs, (side_dist - inv_dir) * voxel_size, 0));
+            float distance_to_surface = distance + distance_offset;
 
             [branch]
             if (base_index == FULL_NODE) {
@@ -332,7 +332,7 @@ float calculate_aabb_overlap<let K : int>(
 
 DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
     float3 ray_pos,
-    half3 ray_dir,
+    float3 ray_dir,
     SparseVoxelOctree svo,
     inout Statistics iter,
 ) {
@@ -340,7 +340,7 @@ DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
         return DdaTraversalOutput(false);
     }
 
-    half3 inv_dir = 1.0 / abs(ray_dir);
+    float3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
     return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, 0, iter);
 }
