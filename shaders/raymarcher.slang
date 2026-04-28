@@ -119,7 +119,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     new_normal = normalize(snoise(world * 0.85 + time) * 0.05 + normal);
                 }
 
-                float3 dir = reflect(iterative_ray_dir, new_normal + (hash33(world * float3(3.2312, -80.4098361, 94.309483)) * 2.0 - 1.0) * 0.01 * roughness);
+                float3 dir = reflect(iterative_ray_dir, new_normal + (hash33(world * float3(3.2312, -80.4098361, 94.309483)) * 2.0 - 1.0) * 0.03 * roughness);
                 iterative_ray_dir = dir;
                 iterative_ray_pos = world + dir * 0.001;
                 color *= diffuse * metallic;
@@ -275,7 +275,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4((first_world % 10) / 10.0, 0);
             break;
         case DebugType::ExitType:
-            output[id.xy] = float4(stats.exit_type / 3.0);
+            output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);
+            //output[id.xy] = float4(stats.exit_type / 3.0);
             break;
         default:
             break;

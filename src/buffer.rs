@@ -97,7 +97,7 @@ pub unsafe fn fill_buffer(
 
 
 // `write_to_buffer` calls that update more than these amount of bytes will revert to using the staging buffer implementation
-const BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD: usize = 4096; 
+const BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD: usize = 65536; // vulkan spec states that data size must be less than this 
 
 // this either creates a staging buffer write or writes to the buffer through cmd_update_buffer
 // switches between both impls depending on the amount of data to write
@@ -189,7 +189,7 @@ pub unsafe fn write_to_buffer(
     }
 
     let end = std::time::Instant::now();
-    log::debug!("buffer write took {}ms", (end-start).as_millis());
+    log::debug!("buffer write took {}μs", (end-start).as_micros());
 }
 
 

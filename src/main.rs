@@ -22,6 +22,7 @@ mod ticker;
 mod buffer;
 mod rays;
 mod statistics;
+mod utils;
 
 use ash;
 use ash::vk;
@@ -135,7 +136,6 @@ struct InternalApp {
     allocator: gpu_allocator::vulkan::Allocator,
     
     svo: SparseVoxelOctree,
-    svo_constructor: TopDownASConstructor,
 
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
@@ -301,7 +301,7 @@ impl InternalApp {
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
-        let (svo, svo_constructor) = voxel::create_sparse_voxel_octree(
+        let svo = voxel::create_sparse_voxel_octree(
             &device,
             &mut allocator,
             &debug_marker,
@@ -412,7 +412,6 @@ impl InternalApp {
             timestamp_period,
             allocator,
             svo,
-            svo_constructor,
             frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
@@ -425,20 +424,8 @@ impl InternalApp {
     pub unsafe fn click(&mut self, add: bool) {
         let position = (self.movement.forward() * 5.0f32 + self.movement.position).floor().as_::<u32>();
 
-        self.svo_constructor.set(position, add);
-        let root_node = &self.svo_constructor.root;
-
-        // FIXME: very very bad! does a full rebuild of the AS even though we might have only modified a few nodes here and there
-        // unfortunately, as the AS is using packed buffer and packed nodes, *adding* a new node will require you to shift all nodes after that
-        // depending on the child indexing order, this could be very cheap (i.e inserting near the end) or very expensive (i.e inserting near the front and having to shift all elements after that)
-        let (bitmasks, indices) = voxel::convert_to_buffers(root_node.clone());
-        
-        let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(bitmasks.as_slice());
-        let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(indices.as_slice());
-
-        // TODO: use the dedicated per-frame command buffer and a scratch buffer and avoid doing the device.wait_idle() inside these calls
-        buffer::write_to_buffer(&self.device, self.pool, self.queue, self.svo.bitmask_buffer.buffer, &mut self.allocator, bitmasks_buffer_bytes);
-        buffer::write_to_buffer(&self.device, self.pool, self.queue, self.svo.index_buffer.buffer, &mut self.allocator, indices_buffer_bytes);
+        self.svo.set(position, add);
+        self.svo.rebuild(&self.device, self.pool, self.queue, &mut self.allocator);
     }
 
     pub unsafe fn resize(&mut self, width: u32, height: u32) {
@@ -818,6 +805,11 @@ impl InternalApp {
             .queue_present(self.queue, &present_info)
             .unwrap();
 
+        // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
+        // remove this when shit is fixed pls thx
+        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
+
+
         let mut timestamps = [0u64; 2];
         let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).is_ok();
         if okay {
@@ -827,10 +819,6 @@ impl InternalApp {
         
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
-
-        // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
-        // remove this when shit is fixed pls thx
-        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
     }
 
     pub unsafe fn destroy(mut self) {

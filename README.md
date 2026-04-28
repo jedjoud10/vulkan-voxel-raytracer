@@ -1,21 +1,16 @@
 # Voxel Raytracing Project (Vulkan, Rust, Slang)
 
 ## Screenies
-<img width="1919" height="1197" alt="Screenshot 2026-01-09 210057" src="https://github.com/user-attachments/assets/16adee94-59e7-48e8-8e15-5ba4c42ac1da" />
-<img width="1919" height="1199" alt="Screenshot 2026-01-09 210150" src="https://github.com/user-attachments/assets/4423947e-7894-45b2-9f88-8550984369ae" />
-
+- TODO: add new screenies...
 
 ## Features
 - PBR rendering (code copied from cflake engine and adapted to Slang)
 - Realistic Sky Rendering using `SkyTheDragon`'s [sky atmo](https://www.shadertoy.com/view/t3XBWH) and `TheNuclearWolf`'s [fast-sky](https://www.shadertoy.com/view/lcGfDK)
-- World stored as a single 3D texture containing voxels.
-- Naive 3D voxel ray-tracing using DDA and compute shaders 
-- Custom "UV Unwrapping" by creating surfaces and unwrapping them.
-    - Implemented using an extra 3D texture that contains **indices** of each voxel to an extra **buffer** that contains the color information (data type: ``uint8_4``, 4 bytes)
-    - Allows for *temporal* effects / smoothing, without camera smearing (as the space isn't only the view space of the camera, it is the *entire world as a whole*) 
-    - Currently only supports shadow / soft shadows. Tried experimenting with naive-GI but did not work very nicely (also was very expensive)
-- Ticking logic system, separate from frame-based logic. Allows us to run the ``update`` compute shader periodically instead of every frame.
-
+- Sparse Voxel Octree used as *acceleration structure* to speed up *DDA* ray-traversal using "recursion" on the GPU
+- Iterative ray-reflections which allows for many bounces between reflections
+- Crisp ray-traced shadows or pixelated shadows
+- *Better* ambient-occlusion approximation using a hacked-together cone/cube-tracing implementation (WIP)
+- Incremental SVO updates on the CPU, and manual updates to the GPU buffer after every update (does a full rebuild of the AS)
 
 ## Things I Tried
 - Implement *octree* / *BHV* as a basic acceleration structure.
@@ -32,7 +27,6 @@
     - This *requires* us to recurse through the structure unfortunately, but it leads to much lower memory usage and we can use 64 bit brickmap logic to accelerate DDA as well
     - Again, this is problematic due to high VGPR pressure, which hurts occupancy. Some buffery latency is not able to be fully hidden away because of this
 - Micro-Voxels: Implemented by storing a ```u64``` inside the voxel texture, which allows us to run a DDA on for sub-meter voxels.
-
 - DDA "pre-computation" buffer: precomputes all the possible ```u64``` bitmasks on the CPU and uploads them to the GPU so that instead of doing "micro-DDA" we can just do a bitwise ```AND``` and check if there is an intersection between the ray and the micro-voxels. Works, but is *not* faster than just naive DDA. This is due to many reasons:
     - This is how it works:
         - It assumues the camera ray is coming from outside the block *towards* it

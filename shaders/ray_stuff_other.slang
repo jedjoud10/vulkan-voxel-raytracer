@@ -10,6 +10,8 @@ struct Statistics {
     int iterations;
     int buffer_fetches;
     int exit_type;
+    int active_threads_per_call;
+    int calls;
 }
 
 static const int DEPTH = 5;
@@ -104,6 +106,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     uint8_t face,
     inout Statistics stats,
 ) {
+
     uint16_t voxel_size = (uint16_t)1 << max(K*2, 0);
     
     // do everything in world space first, and then we convert to local space
@@ -133,6 +136,9 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
 
         // world space position of the node origin
         uint16_t3 origin = parent_world_space_origin + floored_pos * voxel_size;
+
+        stats.calls += 1;
+        stats.active_threads_per_call += WaveActiveCountBits(base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1));
         
         [branch]
         if (base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1)) {  
