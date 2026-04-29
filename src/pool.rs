@@ -2,7 +2,7 @@ use ash::vk;
 
 pub unsafe fn create_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool {
     let images = vk::DescriptorPoolSize::default()
-        .descriptor_count(50)
+        .descriptor_count(80)
         .ty(vk::DescriptorType::STORAGE_IMAGE);
     let buffers = vk::DescriptorPoolSize::default()
         .descriptor_count(30)

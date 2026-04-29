@@ -32,7 +32,6 @@ enum DebugType: uint {
     World,
     Timer,
 }
-
 groupshared uint min_clock;
 groupshared uint max_clock;
 

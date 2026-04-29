@@ -2,40 +2,9 @@ use std::{
     collections::{HashMap, HashSet}, env, fs::{self, DirEntry, File}, io::Write, path::{Path, PathBuf}, time::SystemTime
 };
 
-use serde::{Deserialize, Serialize};
 use shader_slang::*;
 
-#[derive(Serialize, Deserialize)]
-struct Cache {
-    // full path + last modified timestamp
-    entries: HashMap<String, u64>,
-}
-
-
-fn get_file_timestamp(path: &str) -> u64 {
-    let file = File::open(path).unwrap();
-    let modified = file.metadata().unwrap().modified().unwrap();
-    modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
-}
-
-
-// get the latest modified timestamp of the dependency files
-fn get_latest_timestamp_dependencies(module: &Module) -> u64 {
-    let mut latest = 0u64;
-
-    for x in module.dependency_file_paths() {
-        let file = File::open(x).unwrap();
-        let modified = file.metadata().unwrap().modified().unwrap();
-        let since_epoch = modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-        latest = latest.max(since_epoch);
-    }
-
-    latest
-}
-
-fn should_recompile() {}
-
-fn load_module(session: &Session, file_name: &str, cache_set: &HashSet<String>) {
+fn load_module(session: &Session, file_name: &str, compiled_shader_folder_path: &Path) {
     let file_name_with_extension = &format!("{file_name}.slang");
 
     // ok this caching idea failed pretty quickly because if we want to get the dependencies of each file we have to load the module already, which is the expensive part
@@ -70,6 +39,14 @@ fn load_module(session: &Session, file_name: &str, cache_set: &HashSet<String>) 
 
     let mut file = File::create(&path).unwrap();
     file.write(shader_bytecode.as_slice()).unwrap();
+    
+    // also copy the file to the compiled shaders folder
+    {
+        let mut path = PathBuf::from(compiled_shader_folder_path);
+        path.push(format!("{file_name}.spv"));
+        let mut file = File::create(&path).unwrap();
+        file.write(shader_bytecode.as_slice()).unwrap();
+    }    
 
     let path_str = path.to_str().unwrap();
     println!("cargo:rustc-env={file_name}.spv={path_str}");
@@ -96,10 +73,11 @@ fn main() {
     let global_session = GlobalSession::new().unwrap();
 
     let session_options = CompilerOptions::default()
-        .optimization(OptimizationLevel::None)
-        .debug_information(DebugInfoLevel::None)
+        .optimization(OptimizationLevel::Maximal)
+        .debug_information(DebugInfoLevel::Standard)
         .obfuscate(false)
-        .no_mangle(false)
+        .no_mangle(true)
+        .disable_specialization(false)
         .vulkan_use_entry_point_name(true)
         .matrix_layout_row(true);
 
@@ -116,44 +94,23 @@ fn main() {
     let session = global_session.create_session(&session_desc).unwrap();
 
     // visit all the files inside the shaders folder and its 
-    let mut dir_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    dir_path.push("shaders");
+    let manifest_dir_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let mut shaders_path = manifest_dir_path.clone();
+    shaders_path.push("shaders");
+
     let mut entries = Vec::<DirEntry>::new();
-    visit_dirs(&dir_path, &mut entries);
+    visit_dirs(&shaders_path, &mut entries);
 
-    // create a file for caching timestamp data of shader dependencies
-    let out_dir = env::var("OUT_DIR").unwrap();
-    let mut cache_path = PathBuf::from(out_dir);
-    cache_path.push("timestampchacher.wtfkoeit"); // what the fucking kind of extension is this?
-
-    // load the cache if the file exists
-    let cache = File::open(cache_path).map(|file| {
-        serde_json::from_reader::<File, Cache>(file).ok()
-    }).ok().flatten();
-
-    // create a mapping of "modified" files, so that each slang module can check if it needs recompiling
-    // if entries are not in here, it means that they were:
-    //  1. never cached to begin with. they need to be recompiled
-    //  2. cached, but modified. they need to be recompiled
-    let modified = cache.map(|cache| {
-        let mut set = HashSet::<String>::new();
-
-        // add the modified files to the set
-        for (path, cached_timestamp) in cache.entries {
-            let new_timestamp = get_file_timestamp(&path);
-
-            if new_timestamp > cached_timestamp {
-                // means that we modified the file since the last build!
-                set.insert(path);
-            }
-        }
-        
-        set
-    }).unwrap_or_default();
+    // create a "compiled shaders" folder so that we can easily access the compiled SPIRV binaries
+    let mut compiled_shaders_path = manifest_dir_path.clone();
+    compiled_shaders_path.push("compiled_shaders");
+    if !compiled_shaders_path.exists() {
+        fs::DirBuilder::new().create(&compiled_shaders_path).unwrap();
+    }
 
     for entry in entries {
         let file_name = entry.file_name().into_string().unwrap();
         let file_name = file_name.split(".").next().unwrap();
-        load_module(&session, file_name, &modified);
+        load_module(&session, file_name, &compiled_shaders_path);
     }
 }

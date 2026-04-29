@@ -86,5 +86,7 @@ pub(super) unsafe fn get_physical_device_score(
         score += 100;
     }
 
+    log::info!("physical device score: {:?}", score);
+
     Some(score)
 }

@@ -211,6 +211,15 @@ float3 sky(float3 sun_dir, float3 ray_dir, bool extraLightEnabled = true) {
 }
 
 
+// extra func to calculate sun colour
+float3 sun_colour(float3 light) {
+    // TODO: use atmo sky scattering instead of this
+    float3 midday_colour = pow(float3(252, 232, 212) / 255.0, 1/2.2);
+    float3 sunset_colour = pow(float3(249, 128, 7) / 255.0, 1/2.2);
+
+    return lerp(sunset_colour, midday_colour, smoothstep(0, 0.2, light.y));
+}
+
 
 // goated approximation for now
 // TODO: actually convert this to a proper skybox with proper convolution stuff

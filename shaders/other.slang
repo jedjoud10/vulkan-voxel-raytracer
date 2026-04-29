@@ -135,8 +135,8 @@ bool dda_bitset_simple(
 
 struct DdaTraversalOutput {
     bool hit;
-    float3 world;
-    uint3 block_pos;
+    float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
+    uint3 block_pos; // this is always 100% accurate when we reach the bottom most node of the acceleration structure
     uint8_t face;
 }
 
@@ -344,7 +344,7 @@ bool dda<let N : int>(
 
 float3 per_block_unique_colour(uint3 block_pos) {
     float3 col = normalize(hash33(block_pos * float3(23.231, -435.4354, 9412.1)));
-    return lerp(col, 1.0, 0.8f);
+    return col;
 }
 
 // TODO: need to calculate how "close" we get to the surface...
@@ -383,6 +383,15 @@ float3 dda_shadownate(
     }
 
     return 0.0;
+}
+
+// face: x, y, z
+float3 get_accurate_world_position_with_face(float3 world, uint3 block_pos, int face, int3 sign) {
+    // sign is either -1 or 1, we need 0 or 1
+    sign = max(0, -sign);
+
+    world[face] = block_pos[face] + sign[face];
+    return world;
 }
 
 public static const int3[] FACE_NORMALS = {

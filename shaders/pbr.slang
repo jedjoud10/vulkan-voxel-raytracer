@@ -70,7 +70,7 @@ public struct CameraData {
 
 // Surface data struct 
 public struct PbrSurfaceData {
-	public float3 diffuse;
+	public float3 albedo;
 	public float3 normal;
 	public float roughness;
 	public float metallic;
@@ -83,10 +83,10 @@ public struct PbrSurfaceData {
 public float3 brdf(
 	PbrSurfaceData surface,
 	CameraData camera,
-	SunData light
+	SunData light,
 ) {
     float3 half_view = normalize(camera.view + light.direction);
-    float3 f0 = lerp(0.04, surface.diffuse, surface.metallic);
+    float3 f0 = lerp(0.04, surface.albedo, surface.metallic);
 
 	// Calculate kS and kD
 	float3 ks = fresnelRoughness(f0, half_view, camera.view, surface.roughness);
@@ -94,7 +94,11 @@ public float3 brdf(
 	
 
 	float3 specular = specular(f0, surface.roughness, camera.view, light.direction, surface.normal, half_view);
-	float3 brdf = kd * (surface.diffuse) + specular + fresnel(f0, half_view, camera.view);
+
+	// HACK: this (shadow mult) should be here right? no clue why it wasn't there in the original version
+	float3 specular_and_fresnel = (specular + fresnel(f0, half_view, camera.view)) * surface.shadows;
+
+	float3 brdf = kd * (surface.albedo) + specular_and_fresnel;
 	float3 lighting = float3(max(dot(light.direction, surface.normal), 0.0)) * surface.shadows;
 	brdf *= lighting * light.color;
 
@@ -107,17 +111,25 @@ public float3 brdf(
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
-	float3 ambient = irradiance * surface.diffuse * kd * surface.visibility * surface.sky_visibility;
+	float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), surface.roughness, skyColor, groundColor);
+	
+	// make the environment specular reflect the actual sky as the roughness decreases
+	float smoothness = 1-surface.roughness;
+	environment_specular = lerp(environment_specular, sky(light.direction, -reflect(camera.view, surface.normal), true), smoothstep(0.8, 1.0, smoothness));
+
+
+	//float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
+	float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility * surface.sky_visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
 	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
 
-	float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), 0.1, skyColor, groundColor);
-	float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
+
 
 	//return specular_fresnel_ambient;
 	//return surface.sky_visibility;
 	//return environment_specular * environment_specular_fresnel_strength;
-	return brdf * surface.sky_visibility + ambient * 0.8;
+	return brdf + ambient * 0.4;
+	//return brdf + ambient * 0.8 + environment_specular * environment_specular_fresnel_strength;
 	//return specular;
 	//return ambient * 0.5;
 }

@@ -2,6 +2,8 @@ use std::ffi::{CStr, CString};
 
 use ash::vk;
 
+pub const FRAMES_IN_FLIGHT: u32 = 3;
+
 pub unsafe fn create_swapchain(
     instance: &ash::Instance,
     surface_loader: &ash::khr::surface::Instance,
@@ -19,6 +21,13 @@ pub unsafe fn create_swapchain(
     let surface_capabilities = surface_loader
         .get_physical_device_surface_capabilities(physical_device, surface_khr)
         .unwrap();
+
+    let mut frames_in_flight = FRAMES_IN_FLIGHT;
+    if frames_in_flight < surface_capabilities.min_image_count || frames_in_flight > surface_capabilities.max_image_count {
+        log::error!("could not use specific frame in flight count: {FRAMES_IN_FLIGHT}, reverting to swapchain minimum of {}", surface_capabilities.min_image_count);
+        frames_in_flight = surface_capabilities.min_image_count;
+    }
+
     let present_modes: Vec<vk::PresentModeKHR> = surface_loader
         .get_physical_device_surface_present_modes(physical_device, surface_khr)
         .unwrap();
@@ -32,7 +41,7 @@ pub unsafe fn create_swapchain(
         .unwrap();
     let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
         .surface(surface_khr)
-        .min_image_count(surface_capabilities.min_image_count)
+        .min_image_count(frames_in_flight)
         .image_format(surface_formats[0].format)
         .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
         .image_extent(extent)
@@ -47,7 +56,7 @@ pub unsafe fn create_swapchain(
         .clipped(true)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         .old_swapchain(vk::SwapchainKHR::null())
-        .present_mode(present);
+        .present_mode(vk::PresentModeKHR::IMMEDIATE);
 
     let swapchain_loader = ash::khr::swapchain::Device::new(instance, device);
     let swapchain = swapchain_loader
@@ -68,7 +77,6 @@ pub unsafe fn create_swapchain(
     (swapchain_loader, swapchain, images, surface_formats[0].format)
 }
 
-pub const SCALING_FACTOR: u32 = 1;
 
 pub unsafe fn create_temporary_target_render_image(
     instance: &ash::Instance,
@@ -80,6 +88,7 @@ pub unsafe fn create_temporary_target_render_image(
     queue_family_index: u32,
     extent: vk::Extent2D,
     binder: &Option<ash::ext::debug_utils::Device>,
+    scaling_factor: u32,
     name: &CStr
 ) -> (vk::Image, gpu_allocator::vulkan::Allocation) {
     let queue_family_indices = [queue_family_index];
@@ -88,8 +97,8 @@ pub unsafe fn create_temporary_target_render_image(
         .unwrap();
     let rt_image_create_info = vk::ImageCreateInfo::default()
         .extent(vk::Extent3D {
-            width: extent.width / SCALING_FACTOR,
-            height: extent.height / SCALING_FACTOR,
+            width: extent.width / scaling_factor,
+            height: extent.height / scaling_factor,
             depth: 1,
         })
         .format(surface_formats[0].format)
@@ -100,7 +109,7 @@ pub unsafe fn create_temporary_target_render_image(
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
         .samples(vk::SampleCountFlags::TYPE_1)
         .queue_family_indices(&queue_family_indices)
-        //.tiling(vk::ImageTiling::OPTIMAL)
+        .tiling(vk::ImageTiling::OPTIMAL)
         .array_layers(1);
     let rt_image = device.create_image(&rt_image_create_info, None).unwrap();
     let requirements = device.get_image_memory_requirements(rt_image);

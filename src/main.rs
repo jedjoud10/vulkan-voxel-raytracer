@@ -6,8 +6,6 @@
 mod assets;
 mod debug;
 mod query;
-use assets::convert;
-use assets::damn;
 mod device;
 mod input;
 mod instance;
@@ -22,9 +20,12 @@ mod voxel;
 mod ticker;
 mod buffer;
 mod rays;
+mod statistics;
+mod utils;
 
 use ash;
 use ash::vk;
+use clap::Parser;
 use gpu_allocator::vulkan::Allocation;
 use input::Button;
 use input::Input;
@@ -39,13 +40,66 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
+use statistics::Statistics;
 
 use crate::buffer::*;
 use crate::pipeline::*;
 use crate::rays::*;
 use crate::voxel::*;
 
+
+#[derive(clap::Parser, Debug)]
+#[command(about = "Vulkan DDA Voxel Raytracer", long_about = None)]
+struct Args {
+    /// Factor to use to decrease the screen resolution
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4))]
+    resolution_scaling_factor: u32,
+
+    /// Number of shadow samples to use. Set to 0 to disable shadows completely. Set to 1 to use hard-shadows.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=16))]
+    shadow_samples: u32,
+
+    /// Maximum number of rays to trace iteratively for reflections / refractions
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=8))]
+    max_ray_iterations: u32,
+
+    /// Whether or not to use round spherical normals
+    #[arg(long, default_value_t = false)]
+    round_normals: bool,
+
+    /// Whether or not to use ray traced ambient occlusion
+    #[arg(long, default_value_t = false)]
+    ambient_occlusion: bool,
+
+    /// Fun setting to make all mirror reflections wavey lolol
+    #[arg(long, default_value_t = true)]
+    wavy_reflections: bool,
+
+    /// Setting to make all shadows pixelated
+    #[arg(long, default_value_t = false)]
+    pixelated_shadows: bool,
+
+    /// Setting to start in fullscreen from the start. This can be toggled in-game using F5
+    #[arg(long, default_value_t = false)]
+    fullscreen: bool,
+}
+
+struct PerFrameData {
+    swapchain_image: vk::Image,
+    rt_image: vk::Image,
+    rt_image_allocation: Option<Allocation>,
+    present_complete_semaphore: vk::Semaphore,
+    render_finished_semaphore: vk::Semaphore,
+    end_fence: vk::Fence,
+    cmd: vk::CommandBuffer,
+    all_descriptor_sets_for_frame: Vec<vk::DescriptorSet>,
+    src_image_view: vk::ImageView,
+    dst_image_view: vk::ImageView,
+}
+
 struct InternalApp {
+    frame_count: u64,
+
     input: Input,
     movement: Movement,
 
@@ -65,44 +119,33 @@ struct InternalApp {
     swapchain_format: vk::Format,
     swapchain_loader: ash::khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
-    images: Vec<vk::Image>,
-    rt_images: Vec<(vk::Image, Allocation)>,
-    begin_semaphore: vk::Semaphore,
-    end_semaphore: vk::Semaphore,
-    end_fence: vk::Fence,
+
+    frames_in_flight: Vec<PerFrameData>,
+
     queue: vk::Queue,
     queue_family_index: u32,
     pool: vk::CommandPool,
 
     render_compute_pipeline: RenderPipeline,
-    generate_voxel_compute_pipeline: VoxelGeneratePipeline,
-    tick_voxel_compute_pipeline: VoxelTickPipeline,
-
-    //ray_trace_buffers: RayTraceBuffers,
 
     query_pool: vk::QueryPool,
     timestamp_period: f32,
 
     descriptor_pool: vk::DescriptorPool,
     allocator: gpu_allocator::vulkan::Allocator,
-    voxel_image: VoxelImage,
-    voxel_surface_index_image: (vk::Image, Allocation, vk::ImageView),
-    voxel_surface_buffer: Buffer,
-    voxel_surface_counter_buffer: Buffer,
+    
     svo: SparseVoxelOctree,
-    visible_surface_buffer: Buffer,
-    visible_surface_counter_buffer: Buffer,
-    visible_surface_indirect_dispatch_buffer: Buffer,
+
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
     debug_type: u32,
-
-    delta_ms_buffer: [f64; 8],
+    args: Args,
+    stats: Statistics,
 }
 
 impl InternalApp {
-    pub unsafe fn new(event_loop: &ActiveEventLoop) -> Self {
-        let mut assets = HashMap::<&str, Vec<u32>>::new();
+    pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
+        let mut assets = HashMap::<&str, &[u32]>::new();
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
         asset!("voxel_generate.spv", assets);
@@ -110,6 +153,11 @@ impl InternalApp {
         let window = event_loop
             .create_window(Window::default_attributes())
             .unwrap();
+
+        if args.fullscreen {
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
+
         window
             .set_cursor_grab(winit::window::CursorGrabMode::Confined)
             .unwrap();
@@ -142,14 +190,14 @@ impl InternalApp {
             })
             .filter_map(|(a, b)| b.map(|val| (a, val)))
             .collect::<Vec<(vk::PhysicalDevice, u32)>>();
-        physical_device_candidates.sort_by(|(_, a), (_, b)| a.cmp(b));
+        physical_device_candidates.sort_by_key(|(_, score)| *score);
 
         if physical_device_candidates.is_empty() {
             log::error!("no physical device was chosen!");
             panic!();
         }
 
-        let physical_device = physical_device_candidates[0].0;
+        let physical_device = physical_device_candidates.last().unwrap().0;
         let mut physical_device_properties = vk::PhysicalDeviceProperties2::default();
         instance.get_physical_device_properties2(physical_device, &mut physical_device_properties);
         let physical_device_name = physical_device_properties.properties.device_name_as_c_str().unwrap().to_str().unwrap();
@@ -189,10 +237,17 @@ impl InternalApp {
         let pool = device.create_command_pool(&pool_create_info, None).unwrap();
         log::info!("create cmd pool");
 
-        let extent = vk::Extent2D {
+        let mut extent = vk::Extent2D {
             width: 800,
             height: 600,
         };
+
+        if args.fullscreen {
+            extent = vk::Extent2D {
+                width: window.inner_size().width,
+                height: window.inner_size().height,
+            }
+        }
 
         let (swapchain_loader, swapchain, images, swapchain_format) = swapchain::create_swapchain(
             &instance,
@@ -218,6 +273,7 @@ impl InternalApp {
                     queue_family_index,
                     extent,
                     &debug_marker,
+                    args.resolution_scaling_factor,
                     c"temporary render target image"
                 )
             })
@@ -227,86 +283,108 @@ impl InternalApp {
         swapchain::transfer_rt_images(&device, queue_family_index, &rt_images, pool, queue);
         log::info!("transferred layout of render texture images");
 
-        let begin_semaphore = device
-            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-            .unwrap();
-        let end_semaphore = device
-            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-            .unwrap();
-        let end_fence = device.create_fence(&Default::default(), None).unwrap();
-        log::info!("created semaphores and fence");
-
         let descriptor_pool = pool::create_descriptor_pool(&device);
         log::info!("created descriptor pool");
 
-        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker);
+        let spec_constants = RenderPipelineSpecConstants {
+            shadow_samples: args.shadow_samples,
+            max_ray_iterations: args.max_ray_iterations,
+            round_normals: if args.round_normals { 1 } else { 0 },
+            ambient_occlusion: if args.ambient_occlusion { 1 } else { 0 }, 
+            wavy_reflections: if args.wavy_reflections { 1 } else { 0 }, 
+            pixelated_shadows: if args.pixelated_shadows { 1 } else { 0 }, 
+        };
+        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
-        let generate_voxel_compute_pipeline = pipeline::create_generate_voxel_compute_pipeline(&*assets["voxel_generate.spv"], &device, &debug_marker);
-        log::info!("created voxel generate compute pipeline");
-
-        let tick_voxel_compute_pipeline = pipeline::create_tick_voxel_compute_pipeline(&*assets["voxel_tick.spv"], &device, &debug_marker);
-        log::info!("created voxel tick compute pipeline");
-
-        let voxel_image = voxel::create_voxel_octree_mip_map_image(&device, &mut allocator, vk::Format::R64_UINT, vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST, &debug_marker, "voxel image");
-        log::info!("created voxel image");
-
-        let svo = voxel::create_sparse_voxel_octree(&device, &mut allocator, &debug_marker, "sparse voxel octree");
-        log::info!("created sparse voxel octree buffers");
-
-        let voxel_surface_index_image = voxel::create_voxel_image(&device, &mut allocator, vk::Format::R32_UINT, vk::ImageUsageFlags::STORAGE, &debug_marker, c"voxel image indices");
-        log::info!("created voxel surface indices image");
-
-        const SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK: usize = _SIZE*_SIZE*_SIZE / 64;
-        const VOXEL_SURFACE_BUFFER_SIZE: usize = size_of::<vek::Vec4<u8>>() * 6 * 16 * SOME_ARBITRARY_SIZE_FOR_MAX_NUMBER_OF_CUBES_IDK;
-
-        let voxel_surface_buffer = buffer::create_buffer(&device, &mut allocator, VOXEL_SURFACE_BUFFER_SIZE, &debug_marker, "surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-        log::info!("created voxel surface buffer");
-        
-        let voxel_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        log::info!("created voxel surface counter");
-
-        let visible_surface_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 1024 * 1024, &debug_marker, "visible surface buffer", vk::BufferUsageFlags::STORAGE_BUFFER);
-        log::info!("created visible surfaces buffer");
-
-        let visible_surface_counter_buffer = buffer::create_counter_buffer(&device, &mut allocator, &debug_marker, "surface counter buffer");
-        log::info!("created visible surfaces counter");
-
-        let visible_surface_indirect_dispatch_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<u32>() * 3, &debug_marker, "indirect dispatch buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER);
-        log::info!("created visible surfaces indirect buffer");
-
-        voxel::generate_voxel_image(
-            &device,
-            queue,
-            pool,
-            descriptor_pool,
-            queue_family_index,
-            &voxel_image,
-            voxel_surface_index_image.0,
-            voxel_surface_index_image.2,
-            &generate_voxel_compute_pipeline,            
-        );
-
-        voxel::convert_mips_svo(
+        let svo = voxel::create_sparse_voxel_octree(
             &device,
             &mut allocator,
+            &debug_marker,
             queue,
             pool,
             descriptor_pool,
-            queue_family_index,
-            &voxel_image,
-            &svo
+            queue_family_index
         );
+        log::info!("created sparse voxel octree buffers");
+
+        log::info!("creating frames in flight structures...");
+        let mut frames_in_flight = Vec::<PerFrameData>::new();
+        for ((rt_image, rt_image_allocation), swapchain_image) in rt_images.into_iter().zip(images.into_iter()) {
+            let begin_semaphore = device
+                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                .unwrap();
+            let end_semaphore = device
+                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                .unwrap();
+            let end_fence = device.create_fence(&Default::default(), None).unwrap();
+            log::info!("created semaphores and fence");
+
+            
+            let subresource_range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(1)
+                .layer_count(1);
+
+            let src_image_view_create_info = vk::ImageViewCreateInfo::default()
+                .components(vk::ComponentMapping::default())
+                .flags(vk::ImageViewCreateFlags::empty())
+                .format(swapchain_format)
+                .image(rt_image)
+                .subresource_range(subresource_range)
+                .view_type(vk::ImageViewType::TYPE_2D);
+
+            let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
+                .components(vk::ComponentMapping::default())
+                .flags(vk::ImageViewCreateFlags::empty())
+                .format(swapchain_format)
+                .image(swapchain_image)
+                .subresource_range(subresource_range)
+                .view_type(vk::ImageViewType::TYPE_2D);
+
+            let src_image_view = device
+                .create_image_view(&src_image_view_create_info, None)
+                .unwrap();
+            let dst_image_view = device
+                .create_image_view(&dst_image_view_create_info, None)
+                .unwrap();
+
+            let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
+                .command_buffer_count(1)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_pool(pool);
+            let cmd = device
+                .allocate_command_buffers(&cmd_buffer_create_info)
+                .unwrap()[0];            
+
+            let layouts = [render_compute_pipeline.descriptor_set_layout];
+            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(&layouts);
+            let all_descriptor_sets_for_frame = device
+                .allocate_descriptor_sets(&descriptor_set_allocate_info)
+                .unwrap();
+
+            frames_in_flight.push(PerFrameData {
+                swapchain_image,
+                rt_image,
+                rt_image_allocation: Some(rt_image_allocation),
+                present_complete_semaphore: begin_semaphore,
+                render_finished_semaphore: end_semaphore,
+                end_fence,
+                cmd,
+                all_descriptor_sets_for_frame,
+                src_image_view,
+                dst_image_view,
+                
+            });
+        }
 
         let query_pool = query::create_query_pool(&device);
         let timestamp_period = physical_device_properties.properties.limits.timestamp_period;
 
-        /*
-        let ray_trace_buffers = rays::create_ray_trace_buffers(&device, &mut allocator, &debug_marker);
-        log::info!("created ray trace buffers");
-        */
-
         Self {
+            frame_count: 0,
             input: Default::default(),
             movement: Movement::new(),
             window,
@@ -321,69 +399,44 @@ impl InternalApp {
             swapchain_loader,
             swapchain_format,
             swapchain,
-            images,
-            begin_semaphore,
-            end_semaphore,
             queue_family_index,
-            end_fence,
             queue,
             pool,
             render_compute_pipeline,
-            generate_voxel_compute_pipeline,
-            tick_voxel_compute_pipeline,
             descriptor_pool,
             query_pool,
             timestamp_period,
             allocator,
-            voxel_image,
             svo,
-            rt_images,
+            frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
-            voxel_surface_buffer,
-            voxel_surface_index_image,
-            voxel_surface_counter_buffer,
-            visible_surface_buffer,
-            visible_surface_counter_buffer,
-            visible_surface_indirect_dispatch_buffer,
-            sun: vek::Vec3::unit_y() + vek::Vec3::unit_x(),
+            sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
             debug_type: 0,
-            delta_ms_buffer: [0f64; 8]
-            //ray_trace_buffers,
+            stats: Default::default(),
+            args,
         }
     }
 
     pub unsafe fn click(&mut self, add: bool) {
-        let forward = vek::Mat4::from(self.movement.rotation).mul_direction(-vek::Vec3::unit_z()).with_w(0.0f32);
-        let position = (self.movement.position + forward * 2.0).map(|x| x as u32);
+        let position = (self.movement.forward() * 5.0f32 + self.movement.position).floor().as_::<u32>();
 
-
-        voxel::update_voxel(
-            &self.device,
-            &mut self.allocator,
-            self.queue,
-            self.pool,
-            &self.voxel_image,
-            true,
-            /*voxel::Voxel {
-                active: true,
-                reflective: self.ticker.count % 4 == 0,
-                refractive: self.ticker.count % 4 == 1,
-                placed: true,
-            }.into_raw(),
-            */
-            position,
-        )
+        self.svo.set(position, add);
+        self.svo.rebuild(&self.device, self.pool, self.queue, &mut self.allocator);
     }
 
     pub unsafe fn resize(&mut self, width: u32, height: u32) {
+        log::warn!("resizing! width: {width}, height: {height}");
         self.device.device_wait_idle().unwrap();
 
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
 
-        for (image, allocation) in self.rt_images.drain(..) {
-            self.device.destroy_image(image, None);
-            self.allocator.free(allocation).unwrap();
+        for frame in self.frames_in_flight.iter_mut() {
+            self.device.destroy_image_view(frame.dst_image_view, None);
+            self.device.destroy_image_view(frame.src_image_view, None);
+
+            self.device.destroy_image(frame.rt_image, None);
+            self.allocator.free(frame.rt_image_allocation.take().unwrap()).unwrap();
         }
 
         let extent = vk::Extent2D { width, height };
@@ -397,12 +450,16 @@ impl InternalApp {
             extent,
             &self.debug_marker,
         );
-        self.images = images;
+
+        for (frame, swapchain_image) in self.frames_in_flight.iter_mut().zip(images) {
+            frame.swapchain_image = swapchain_image;
+        }
+
         self.swapchain_loader = swapchain_loader;
         self.swapchain_format = swapchain_format;
         self.swapchain = swapchain;
 
-        let rt_images: Vec<(vk::Image, Allocation)> = (0..self.images.len())
+        let rt_images: Vec<(vk::Image, Allocation)> = (0..self.frames_in_flight.len())
             .into_iter()
             .map(|_| {
                 swapchain::create_temporary_target_render_image(
@@ -415,6 +472,7 @@ impl InternalApp {
                     self.queue_family_index,
                     extent,
                     &self.debug_marker,
+                    self.args.resolution_scaling_factor,
                     c"temporary render target image"
                 )
             })
@@ -426,101 +484,114 @@ impl InternalApp {
             self.pool,
             self.queue,
         );
-        self.rt_images = rt_images;
+
+        for (frame, (rt_image, rt_image_allocation)) in self.frames_in_flight.iter_mut().zip(rt_images) {
+            frame.rt_image = rt_image;
+            frame.rt_image_allocation = Some(rt_image_allocation);
+
+            let subresource_range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(1)
+                .layer_count(1);
+
+            let src_image_view_create_info = vk::ImageViewCreateInfo::default()
+                .components(vk::ComponentMapping::default())
+                .flags(vk::ImageViewCreateFlags::empty())
+                .format(swapchain_format)
+                .image(rt_image)
+                .subresource_range(subresource_range)
+                .view_type(vk::ImageViewType::TYPE_2D);
+
+            let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
+                .components(vk::ComponentMapping::default())
+                .flags(vk::ImageViewCreateFlags::empty())
+                .format(swapchain_format)
+                .image(frame.swapchain_image)
+                .subresource_range(subresource_range)
+                .view_type(vk::ImageViewType::TYPE_2D);
+
+            frame.src_image_view = self.device
+                .create_image_view(&src_image_view_create_info, None)
+                .unwrap();
+            frame.dst_image_view = self.device
+                .create_image_view(&dst_image_view_create_info, None)
+                .unwrap();
+
+        }
+
+        self.device.device_wait_idle().unwrap();
     }
 
     pub unsafe fn render(&mut self, delta: f32, elapsed: f32) {
-        self.device.reset_fences(&[self.end_fence]).unwrap();
+        let frame_index = self.frame_count % (self.frames_in_flight.len() as u64);
+        let PerFrameData {
+            swapchain_image,
+            rt_image,
+            rt_image_allocation,
+            present_complete_semaphore,
+            end_fence,
+            cmd,
+            all_descriptor_sets_for_frame,
+            src_image_view,
+            dst_image_view,
+            ..
+        } = &self.frames_in_flight[frame_index as usize];
 
-        let (index, _) = self
+        let cmd = *cmd;
+        let swapchain_image = *swapchain_image;
+        let rt_image = *rt_image;
+        let present_complete_semaphores = [*present_complete_semaphore];
+        let end_fence = *end_fence;
+        let src_image_view = *src_image_view;
+        let dst_image_view = *dst_image_view;
+        let all_descriptor_sets_for_frame = all_descriptor_sets_for_frame;
+        let render_descriptor_set = all_descriptor_sets_for_frame[0];
+
+        
+        if let Err(err) = self.device.wait_for_fences(&[end_fence], true, u64::MAX) {
+            log::error!("wait on fence err: {:?}", err);
+        }
+
+        self.device.reset_fences(&[end_fence]).unwrap();
+
+        let (acquired_swapchain_image_index, _) = self
             .swapchain_loader
             .acquire_next_image(
                 self.swapchain,
                 u64::MAX,
-                self.begin_semaphore,
+                *present_complete_semaphore,
                 vk::Fence::null(),
             )
             .unwrap();
-        let dst_image = self.images[index as usize];
-        let (src_image, _) = self.rt_images[index as usize];
 
-        let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
-            .command_buffer_count(1)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_pool(self.pool);
-        let cmd = self
-            .device
-            .allocate_command_buffers(&cmd_buffer_create_info)
-            .unwrap()[0];
+        let render_finished_semaphore = [self.frames_in_flight[acquired_swapchain_image_index as usize].render_finished_semaphore];
+        
+        let dst_image = swapchain_image;
+        let src_image= rt_image;
 
         let cmd_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            .flags(vk::CommandBufferUsageFlags::empty());
+        self.device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()).unwrap();
         self.device
             .begin_command_buffer(cmd, &cmd_buffer_begin_info)
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
-        //self.sun = vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized();
-        self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
+        //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
         let push_constants = PushConstants2 {
             forward: vek::Mat4::from(self.movement.rotation).mul_direction(-vek::Vec3::unit_z()).with_w(0.0f32),
             position: self.movement.position.with_w(0.0f32),
             sun: self.sun.normalized().with_w(0f32),
             tick: self.ticker.count,
-
-            // FIXME: assumes we are running the shadow calc for every frame...
             delta: delta.max(1f32 / ticker::TICKS_PER_SECOND),
         };
 
-        /*
-        let desc_temp = self.ticker.update(delta).then(|| voxel::execute_voxel_tick_compute(
-            &self.device,
-            cmd,
-            self.descriptor_pool,
-            self.queue_family_index,
-            self.voxel_surface_buffer.buffer,
-            self.voxel_surface_counter_buffer.buffer,
-            self.visible_surface_buffer.buffer,
-            self.visible_surface_counter_buffer.buffer,
-            self.visible_surface_indirect_dispatch_buffer.buffer,
-            &self.voxel_image,
-            self.voxel_surface_index_image.0,
-            self.voxel_surface_index_image.2,
-            &self.tick_voxel_compute_pipeline,
-            push_constants
-        ));
-        */
 
         let subresource_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .level_count(1)
             .layer_count(1);
-
-        let src_image_view_create_info = vk::ImageViewCreateInfo::default()
-            .components(vk::ComponentMapping::default())
-            .flags(vk::ImageViewCreateFlags::empty())
-            .format(self.swapchain_format)
-            .image(src_image)
-            .subresource_range(subresource_range)
-            .view_type(vk::ImageViewType::TYPE_2D);
-
-        let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
-            .components(vk::ComponentMapping::default())
-            .flags(vk::ImageViewCreateFlags::empty())
-            .format(self.swapchain_format)
-            .image(dst_image)
-            .subresource_range(subresource_range)
-            .view_type(vk::ImageViewType::TYPE_2D);
-
-        let src_image_view = self
-            .device
-            .create_image_view(&src_image_view_create_info, None)
-            .unwrap();
-        let dst_image_view = self
-            .device
-            .create_image_view(&dst_image_view_create_info, None)
-            .unwrap();
 
         let dst_undefined_to_blit_dst_layout_transition = vk::ImageMemoryBarrier2::default()
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -544,17 +615,6 @@ impl InternalApp {
         */
 
 
-        // we need: render compute + pipeline + ray compute pipeline
-        let layouts = [self.render_compute_pipeline.descriptor_set_layout];
-        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(self.descriptor_pool)
-            .set_layouts(&layouts);
-        let all_descriptor_sets_for_frame = self
-            .device
-            .allocate_descriptor_sets(&descriptor_set_allocate_info)
-            .unwrap();
-        let render_descriptor_set = all_descriptor_sets_for_frame[0];
-
 
         let descriptor_rt_image_info = vk::DescriptorImageInfo::default()
             .image_view(src_image_view)
@@ -570,7 +630,7 @@ impl InternalApp {
             .range(u64::MAX);
 
         let descriptor_rt_image_infos = [descriptor_rt_image_info];
-        let descriptor_ray_inputs_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
+        let descriptor_svo_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
 
         let image_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
@@ -579,15 +639,14 @@ impl InternalApp {
             .dst_set(render_descriptor_set)
             .image_info(&descriptor_rt_image_infos);
         let buffer_descriptor_write = vk::WriteDescriptorSet::default()
-            .descriptor_count(descriptor_ray_inputs_infos.len() as u32)
+            .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(1)
             .dst_set(render_descriptor_set)
-            .buffer_info(&descriptor_ray_inputs_infos);
+            .buffer_info(&descriptor_svo_infos);
         
 
         self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write], &[]);
-
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
@@ -604,7 +663,7 @@ impl InternalApp {
 
         let size = self.window.inner_size();
         let size = vek::Vec2::<u32>::new(size.width, size.height)
-            .map(|val| val / swapchain::SCALING_FACTOR);
+            .map(|val| val / self.args.resolution_scaling_factor);
 
         let group_size = 8 as f32;
         let width_group_size = (size.x as f32 / group_size).ceil() as u32;
@@ -618,6 +677,7 @@ impl InternalApp {
             position: self.movement.position.with_w(0f32),
             sun: self.sun.normalized().with_w(0f32),
             debug_type: self.debug_type as u32,
+            time: elapsed,
         };
 
         let raw = bytemuck::bytes_of(&push_constants);
@@ -653,8 +713,8 @@ impl InternalApp {
 
         let origin_offset = vk::Offset3D::default();
         let src_extent_offset = vk::Offset3D::default()
-            .x(self.window.inner_size().width as i32 / swapchain::SCALING_FACTOR as i32)
-            .y(self.window.inner_size().height as i32 / swapchain::SCALING_FACTOR as i32)
+            .x(self.window.inner_size().width as i32 / self.args.resolution_scaling_factor as i32)
+            .y(self.window.inner_size().height as i32 / self.args.resolution_scaling_factor as i32)
             .z(1);
         let dst_extent_offset = vk::Offset3D::default()
             .x(self.window.inner_size().width as i32)
@@ -675,6 +735,8 @@ impl InternalApp {
             .dst_offsets(dst_offsets)
             .dst_subresource(subresource_layers);
 
+        // TODO: implement fast path that does not even allocate RT and just renders to the swapchain image directly
+        // replacing this blit by a copy does not improve performance much, but removing it completely definitely should
         let regions = [image_blit];
         self.device.cmd_blit_image(
             cmd,
@@ -717,51 +779,42 @@ impl InternalApp {
         self.device.end_command_buffer(cmd).unwrap();
 
         let cmds = [cmd];
-        let rendered_semaphores = [self.end_semaphore];
-        let acquire_sempahores = [self.begin_semaphore];
         let wait_masks =
-            [vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::ALL_GRAPHICS];
+            [vk::PipelineStageFlags::ALL_COMMANDS | vk::PipelineStageFlags::ALL_GRAPHICS | vk::PipelineStageFlags::COMPUTE_SHADER];
         let submit_info = vk::SubmitInfo::default()
             .command_buffers(&cmds)
-            .signal_semaphores(&rendered_semaphores)
+            .signal_semaphores(&render_finished_semaphore)
             .wait_dst_stage_mask(&wait_masks)
-            .wait_semaphores(&acquire_sempahores);
+            .wait_semaphores(&present_complete_semaphores);
         self.device
-            .queue_submit(self.queue, &[submit_info], self.end_fence)
+            .queue_submit(self.queue, &[submit_info], end_fence)
             .unwrap();
 
         let swapchains = [self.swapchain];
-        let indices = [index];
+        let indices = [acquired_swapchain_image_index];
         let present_info = vk::PresentInfoKHR::default()
             .swapchains(&swapchains)
             .image_indices(&indices)
-            .wait_semaphores(&rendered_semaphores);
+            .wait_semaphores(&render_finished_semaphore);
 
-        self.device
-            .wait_for_fences(&[self.end_fence], true, u64::MAX)
-            .unwrap();
         self.swapchain_loader
             .queue_present(self.queue, &present_info)
             .unwrap();
-        self.device.free_command_buffers(self.pool, &[cmd]);
 
-        self.device.destroy_image_view(src_image_view, None);
-        self.device.destroy_image_view(dst_image_view, None);
-        self.device
-            .free_descriptor_sets(self.descriptor_pool, &all_descriptor_sets_for_frame)
-            .unwrap();
+        // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
+        // remove this when shit is fixed pls thx
+        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
+
 
         let mut timestamps = [0u64; 2];
-        self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).unwrap();
-        let delta_in_ms = ((timestamps[1] - timestamps[0]) as f64 * self.timestamp_period as f64) / 1000000.0f64;
-        self.delta_ms_buffer.rotate_right(1);
-        self.delta_ms_buffer[0] = delta_in_ms;
-
-        /*
-        if let Some(desc_temp) = desc_temp{
-            self.device.free_descriptor_sets(self.descriptor_pool, &[desc_temp]).unwrap();
+        let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).is_ok();
+        if okay {
+            let delta_in_ms = ((timestamps[1].saturating_sub(timestamps[0])) as f64 * self.timestamp_period as f64) / 1000000.0f64;
+            self.stats.push_query_timings(delta_in_ms);
         }
-        */
+        
+        self.stats.end_of_frame(self.frame_count);
+        self.frame_count += 1;
     }
 
     pub unsafe fn destroy(mut self) {
@@ -770,16 +823,19 @@ impl InternalApp {
         self.render_compute_pipeline.destroy(&self.device);
         log::info!("destroyed render compute pipeline");
 
+        /*
         self.tick_voxel_compute_pipeline.destroy(&self.device);
         log::info!("destroyed tick voxel compute pipeline");
 
         self.generate_voxel_compute_pipeline.destroy(&self.device);
         log::info!("destroyed generate voxel compute pipeline");
+        */
 
 
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");
 
+        /*
         self.voxel_image.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed voxel image");
 
@@ -802,23 +858,38 @@ impl InternalApp {
 
         self.visible_surface_indirect_dispatch_buffer.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed indirect dispatch buffer");
+        */
 
         self.svo.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVO buffer");
 
-        //self.ray_trace_buffers.destroy(&self.device, &mut self.allocator);
-        //log::info!("destroyed ray trace buffers");
-
         self.device.destroy_query_pool(self.query_pool, None);
         log::info!("destroyed query pool");
 
-        // TODO: Just cope with the error messages vro
+        log::info!("waiting for all frame in flight fences...");
+        let fences = self.frames_in_flight.iter().map(|x| x.end_fence).collect::<Vec<_>>();
         self.device
-            .wait_for_fences(&[self.end_fence], true, u64::MAX)
+            .wait_for_fences(&fences, true, u64::MAX)
             .unwrap();
-        self.device.destroy_semaphore(self.begin_semaphore, None);
-        self.device.destroy_semaphore(self.end_semaphore, None);
-        self.device.destroy_fence(self.end_fence, None);
+        for frame in self.frames_in_flight.into_iter() {
+            self.device.destroy_image_view(frame.dst_image_view, None);
+            self.device.destroy_image_view(frame.src_image_view, None);
+            log::info!("destroyed image views for frame data");
+
+            self.device.destroy_image(frame.rt_image, None);
+            self.allocator.free(frame.rt_image_allocation.unwrap()).unwrap();
+            log::info!("destroyed render target image frame data");
+
+            self.device.destroy_semaphore(frame.present_complete_semaphore, None);
+            self.device.destroy_semaphore(frame.render_finished_semaphore, None);
+            self.device.destroy_fence(frame.end_fence, None);
+            log::info!("destroyed semaphores and fences frame data");            
+
+            self.device.free_command_buffers(self.pool, &[frame.cmd]);
+            log::info!("destroyed cmd buffer frame data");            
+        }
+
+
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
         log::info!("destroyed swapchain");
@@ -826,11 +897,6 @@ impl InternalApp {
         self.surface_loader.destroy_surface(self.surface_khr, None);
         log::info!("destroyed surface");
 
-        for (image, allocation) in self.rt_images {
-            self.device.destroy_image(image, None);
-            self.allocator.free(allocation).unwrap();
-        }
-        log::info!("destroyed render target images");
 
         self.device.destroy_command_pool(self.pool, None);
         log::info!("destroyed cmd pool");
@@ -850,6 +916,7 @@ impl InternalApp {
 
 struct App {
     internal: Option<InternalApp>,
+    args: Option<Args>,
     start: Instant,
     last: Instant,
 }
@@ -857,7 +924,7 @@ struct App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         unsafe {
-            self.internal = Some(InternalApp::new(event_loop));
+            self.internal = Some(InternalApp::new(event_loop, self.args.take().unwrap()));
         }
     }
 
@@ -896,13 +963,21 @@ impl ApplicationHandler for App {
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyP)).pressed() {
-                    let render_time_avg = inner.delta_ms_buffer.iter().sum::<f64>() / inner.delta_ms_buffer.len() as f64;
+                    let render_time_avg = inner.stats.get_average_in_ms();
                     let delta_ms = delta * 1000f32;
-                    println!("CPU delta: {delta_ms:.3}, Main Compute Render Time Average: {render_time_avg:.3}");
+                    log::info!("CPU delta: {delta_ms:.3}, Main Compute Render Time Average: {render_time_avg:.3}");
+                }
+
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyL)).pressed() {
+                    inner.stats.start_benchmarking(inner.frame_count);
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
                     inner.debug_type = (inner.debug_type + 1) % 6;
+                }
+
+                if inner.input.get_button(Button::Mouse(MouseButton::Middle)).held() {
+                    inner.sun = inner.movement.forward();
                 }
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyQ)).pressed() {
@@ -940,7 +1015,9 @@ impl ApplicationHandler for App {
     }
 }
 
+
 pub fn main() {
+    let args = Args::parse();
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Debug)
         .init();
@@ -949,6 +1026,7 @@ pub fn main() {
         start: Instant::now(),
         last: Instant::now(),
         internal: None,
+        args: Some(args),
     };
     event_loop.run_app(&mut app).unwrap();
 }

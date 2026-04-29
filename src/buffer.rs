@@ -23,9 +23,10 @@ pub unsafe fn create_buffer(
     size: usize,
     binder: &Option<ash::ext::debug_utils::Device>,
     name: &str,
-    flags: vk::BufferUsageFlags
+    flags: vk::BufferUsageFlags,
 ) -> Buffer {
-    log::debug!("creating buffer {name} ({}kb)", size / 1024);
+    let bytes_formatted = bytesize::ByteSize::b(size as u64);
+    log::debug!("creating buffer {} ({})", name, bytes_formatted.display().si());
     let buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
         .usage(flags)
@@ -56,9 +57,9 @@ pub unsafe fn create_buffer(
 
     
     let device_memory = allocation.memory();
-    device.bind_buffer_memory(buffer, device_memory, 0).unwrap();
-
-    log::debug!("created buffer {name} of size {size}");
+    device.bind_buffer_memory(buffer, device_memory, allocation.offset()).unwrap();
+    
+    log::debug!("created buffer {} of size {}", name, bytes_formatted.display().si());
 
     Buffer {
         buffer, allocation
@@ -96,7 +97,7 @@ pub unsafe fn fill_buffer(
 
 
 // `write_to_buffer` calls that update more than these amount of bytes will revert to using the staging buffer implementation
-const BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD: usize = 4096; 
+const BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD: usize = 65536; // vulkan spec states that data size must be less than this 
 
 // this either creates a staging buffer write or writes to the buffer through cmd_update_buffer
 // switches between both impls depending on the amount of data to write
@@ -106,10 +107,9 @@ pub unsafe fn write_to_buffer(
     queue: vk::Queue,
     dst_buffer: vk::Buffer,
     allocator: &mut Allocator,
-    data: &[u32]
+    bytes: &[u8]
 ) {
-    let bytes: &[u8] = bytemuck::cast_slice(data);
-
+    let start = std::time::Instant::now();
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
         .level(vk::CommandBufferLevel::PRIMARY)
@@ -119,13 +119,14 @@ pub unsafe fn write_to_buffer(
         .unwrap()[0];
     device.begin_command_buffer(cmd, &Default::default()).unwrap();
 
+    let bytes_formatted = bytesize::ByteSize::b(bytes.len() as u64);
     let staging_buffer_opt = if bytes.len() < BUFFER_WRITE_INLINE_MAX_BYTES_THRESHOLD {
         // inline (command buffer write) impl
-        log::info!("writing {} bytes to buffer, using inline path", bytes.len());
+        log::info!("writing {} to buffer, using inline path", bytes_formatted.display().si());
         device.cmd_update_buffer(cmd, dst_buffer, 0, bytes);
         None
     } else {
-        log::info!("writing {} bytes to buffer, using staging buffer path", bytes.len());
+        log::info!("writing {} to buffer, using staging buffer path", bytes_formatted.display().si());
         // staging buffer impl
         let staging_buffer_create_info = vk::BufferCreateInfo::default()
             .flags(vk::BufferCreateFlags::empty())
@@ -147,8 +148,12 @@ pub unsafe fn write_to_buffer(
             .unwrap();
 
         let device_memory = allocation.memory();
-        device.bind_buffer_memory(staging_buffer, device_memory, 0).unwrap();
-        allocation.mapped_slice_mut().unwrap().copy_from_slice(bytes);
+        device.bind_buffer_memory(staging_buffer, device_memory, allocation.offset()).unwrap();
+        
+        let dst_slice = allocation.mapped_slice_mut().unwrap();
+
+        // FIXME: for some reason on nvidia the slice has different size? shouldn't gpu_allocator handle this type of stuff...
+        dst_slice[..(bytes.len())].copy_from_slice(bytes);
 
         let region = vk::BufferCopy2::default()
             .dst_offset(0)
@@ -182,6 +187,9 @@ pub unsafe fn write_to_buffer(
         allocator.free(allocation).unwrap();
         device.destroy_buffer(staging_buffer, None);
     }
+
+    let end = std::time::Instant::now();
+    log::debug!("buffer write took {}μs", (end-start).as_micros());
 }
 
 
