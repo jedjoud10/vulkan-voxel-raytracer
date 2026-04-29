@@ -109,7 +109,7 @@ pub unsafe fn create_temporary_target_render_image(
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
         .samples(vk::SampleCountFlags::TYPE_1)
         .queue_family_indices(&queue_family_indices)
-        //.tiling(vk::ImageTiling::OPTIMAL)
+        .tiling(vk::ImageTiling::OPTIMAL)
         .array_layers(1);
     let rt_image = device.create_image(&rt_image_create_info, None).unwrap();
     let requirements = device.get_image_memory_requirements(rt_image);

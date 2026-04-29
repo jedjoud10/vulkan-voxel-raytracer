@@ -59,8 +59,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float3 iterative_ray_dir = ray_dir;
     float3 iterative_ray_pos = ray_pos;
 
-    float3 first_normals = 0.0;
-    float3 first_world = 0.0;
+    float3 nth_normals = 0.0;
+    float3 nth_world = 0.0;
     
     float3 color = 1.0;
 
@@ -77,9 +77,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             uint3 block_pos = ray.block_pos;
             float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
 
-            // first ray has some debug stuff going on
-            first_normals = normal;
-            first_world = world;
+            // fetch the nth normal and world position
+            if ((((uint)round(time)) % MAX_ITERATIONS) == i) {
+                nth_normals = normal;
+                nth_world = world;
+            }
 
             if (ROUND_NORMALS) {
                 normal = normalize(world - ray.block_pos - 0.5);
@@ -180,8 +182,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         float3 rng = (hash33((shadow_ray_start) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
                         float3 dir = normalize(sun.xyz + rng * 0.025);
                         float d = 0;
+                        float strength = pow(dot(dir, sun.xyz), 40);
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                        shadow += (t ? 0.0 : 1) / SHADOW_SAMPLES;
+                        shadow += (t ? 0.0 : strength) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
@@ -269,10 +272,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4(heatmap(stats.buffer_fetches / 256.0), 0);
             break;
         case DebugType::Normals:
-            output[id.xy] = float4(first_normals, 0);
+            output[id.xy] = float4(nth_normals, 0);
             break;
         case DebugType::World:
-            output[id.xy] = float4((first_world % 10) / 10.0, 0);
+            output[id.xy] = float4((nth_world % 10) / 10.0, 0);
             break;
         case DebugType::ExitType:
             output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);

@@ -53,10 +53,11 @@ impl Movement {
     }
     pub fn update(&mut self, input: &Input, ratio: f32, delta: f32) {
         self.local_velocity = vek::Vec2::<f32>::zero();
-        let speed = if input.get_button(KeyCode::ShiftLeft).held() {
-            100f32 + 8f32.powf(self.boost)
-        } else if input.get_button(KeyCode::ControlLeft).held() {
-            0.25f32
+
+        let boosted = input.get_button(KeyCode::ShiftLeft).held();
+
+        let speed = if boosted {
+            2f32.powf(self.boost)
         } else {
             1.0f32
         };
@@ -73,8 +74,10 @@ impl Movement {
             self.local_velocity.x = -1f32;
         }
 
-        //self.boost += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta));
-        self.boost = self.boost.clamp(0.0, 5.0);
+        if boosted {
+            self.boost += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta)) * 0.2;
+            self.boost = self.boost.clamp(-5.0, 5.0);
+        }
         let sens = 1.0f32;
         let summed_mouse_target = vek::Vec2::new(
             input.get_axis(Axis::Mouse(MouseAxis::PositionX)) * 0.003 * sens,
@@ -94,7 +97,9 @@ impl Movement {
         let uhh = 1f32 / ratio;
         
         // TODO: fix the weird radian fov?
-        self.target_fov += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta)) * 5f32;
+        if !boosted {
+            self.target_fov += input.get_axis(Axis::Mouse(MouseAxis::ScrollDelta)) * 5f32;
+        }
         self.target_fov = self.target_fov.clamp(0.05, 179.5);
         self.fov += (self.target_fov-self.fov).clamp(-100f32, 100f32) * delta * 20f32;
 

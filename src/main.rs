@@ -6,7 +6,6 @@
 mod assets;
 mod debug;
 mod query;
-use assets::damn;
 mod device;
 mod input;
 mod instance;
@@ -57,11 +56,11 @@ struct Args {
     resolution_scaling_factor: u32,
 
     /// Number of shadow samples to use. Set to 0 to disable shadows completely. Set to 1 to use hard-shadows.
-    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=16))]
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=16))]
     shadow_samples: u32,
 
     /// Maximum number of rays to trace iteratively for reflections / refractions
-    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=8))]
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=8))]
     max_ray_iterations: u32,
 
     /// Whether or not to use round spherical normals
@@ -73,7 +72,7 @@ struct Args {
     ambient_occlusion: bool,
 
     /// Fun setting to make all mirror reflections wavey lolol
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = true)]
     wavy_reflections: bool,
 
     /// Setting to make all shadows pixelated
@@ -146,13 +145,10 @@ struct InternalApp {
 
 impl InternalApp {
     pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
-        let mut assets = HashMap::<&str, Vec<u8>>::new();
+        let mut assets = HashMap::<&str, &[u32]>::new();
         asset!("raymarcher.spv", assets);
         asset!("voxel_tick.spv", assets);
         asset!("voxel_generate.spv", assets);
-
-        // FIXME: ugly but works fuck it
-        let assets: HashMap<&str, &[u32]> = HashMap::from_iter(assets.iter().map(|(a, b)| (*a, bytemuck::cast_slice::<u8, u32>(&b))));
 
         let window = event_loop
             .create_window(Window::default_attributes())
