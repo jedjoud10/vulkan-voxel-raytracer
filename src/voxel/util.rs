@@ -6,12 +6,23 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRef
 use smallvec::SmallVec;
 use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 
-use super::{sparse_tree::*, recursive::*};
+use super::{sparse::*, recursive::*};
 
 pub const BOTTOM_NODE: u32 = u32::MAX;
 pub const FULL_NODE: u32 = u32::MAX-1; 
 pub const SVO_DEPTH: u32 = 5;
 pub const TOTAL_SIZE: u32 = 1 << (SVO_DEPTH * 2);
+
+fn child_offset_to_child_index(offset: vek::Vec3<usize>) -> usize {
+    offset.x + offset.y * 4 + offset.z * 4 * 4
+}
+
+fn child_index_to_child_offset(index: usize) -> vek::Vec3<usize> {
+    let x = index % 4;
+    let y = (index / 4) % 4;
+    let z = index / 16;
+    vek::Vec3::new(x,y,z)
+}
 
 fn surface_area_bitmask(bitmask: u64) -> u32 {
     let mut surface_area = 0u32;
@@ -156,6 +167,96 @@ pub fn convert_to_buffers(root_index: usize, nodes: &[FlatNode]) -> (Vec<u64>, V
     let end = Instant::now();
     log::debug!(" - time taken: {}ms", (end-start).as_millis());
     (bitmask_vec, index_vec)
+}
+
+
+struct SimpleTraversalNode<'a> {
+    node: &'a FlatNode,
+    height: usize,
+    origin: vek::Vec3<u32>,
+}
+
+
+// hard-coded chunk granularity of 64x64x64
+pub struct SparseImageChunk {
+    pub origin: vek::Vec3<u32>,
+    pub data: Vec<u8>,
+}
+
+pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3<u32>, node: &FlatNode, nodes: &[FlatNode]) -> SparseImageChunk {
+    let mut queue = VecDeque::<SimpleTraversalNode>::new();
+    queue.push_back(SimpleTraversalNode { node: &node, height: 3, origin: origin }); // 4^3 = 64
+
+    let mut data: Vec<u8> = vec![0u8; 64*64*64];
+
+    while let Some(SimpleTraversalNode { node, height, origin  }) = queue.pop_front() {
+        let size: u32 = 4u32.pow(height as u32);
+
+        if node.bottom {
+            data[child_offset_to_child_index(origin.as_::<usize>())] = 255;
+        } else {
+            if node.full {
+                for x in origin.x..(size+origin.x) { 
+                    for y in origin.y..(size+origin.y) { 
+                        for z in origin.z..(size+origin.z) { 
+                            let i = x + y * 4 + z * 4 * 4;
+                            data[i as usize] = 255;
+                        }
+                    }    
+                }
+            } else {
+                // node is not full, we must compute bitmask of children and stuff
+                if let Some(children) = node.children.as_ref() {
+                    for (ci, child) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))) {
+                        queue.push_back(SimpleTraversalNode { node: &nodes[*child], height: height - 1, origin: origin + child_index_to_child_offset(ci).as_::<u32>() * (size/4) });
+                    }
+                }
+            }
+        }
+    }
+
+    SparseImageChunk {
+        origin: origin,
+        data: data,
+    }
+}
+
+// hard-coded chunk granularity of 64x64x64
+pub fn convert_to_sparse_image_chunks(root_index: usize, nodes: &[FlatNode]) -> Vec<SparseImageChunk> {
+    let mut queue = VecDeque::<SimpleTraversalNode>::new();
+    queue.push_back(SimpleTraversalNode { node: &nodes[root_index], height: SVO_DEPTH as usize, origin: vek::Vec3::zero() });
+
+    let mut binding_chunks = Vec::<SparseImageChunk>::new();
+
+    while let Some(SimpleTraversalNode { node, height, origin  }) = queue.pop_front() {
+        // chunks are handled differently. we convert...
+        if height == 3 {
+            if !node.full && node.children.is_some() {
+                binding_chunks.push(convert_single_chunk_node_to_sparse_image_binding_chunk(origin, node, nodes));
+            }
+
+            continue;
+        }
+
+        let size: u32 = 4u32.pow(height as u32);
+
+        if node.bottom {
+            // TODO
+        } else {
+            if node.full {
+                // TODO
+            } else {
+                // node is not full, we must compute bitmask of children and stuff
+                if let Some(children) = node.children.as_ref() {
+                    for (ci, child) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))) {
+                        queue.push_back(SimpleTraversalNode { node: &nodes[*child], height: height - 1, origin: origin + child_index_to_child_offset(ci).as_::<u32>() * (size/4) });
+                    }
+                }
+            }
+        }
+    }
+
+    binding_chunks
 }
 
 struct ConvertTraversalNode<'a> {

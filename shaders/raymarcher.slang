@@ -164,9 +164,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     */
                 }
 
-                //float3 rng = (hash33((world) * 23.12123545 + i * 30.43324) * 2.0 - 1.0);
-                //float3 dir = reflect(iterative_ray_dir, normalize(normal + rng * 0.05));
-                float3 dir = reflect(iterative_ray_dir, normal);
                 float shadow = 1.0;
                 float sky_visibility = 1.0;
 

@@ -29,7 +29,9 @@ pub unsafe fn create_device_and_queue(
         .shader_image_int64_atomics(true); 
     let device_features_base = vk::PhysicalDeviceFeatures::default()
         .shader_int16(true)
-        .shader_int64(true);
+        .shader_int64(true)
+        .sparse_binding(true)
+        .sparse_residency_image3_d(true);
     let mut device_features_12 = vk::PhysicalDeviceVulkan12Features::default()
         .storage_buffer8_bit_access(true)
         .shader_float16(true)

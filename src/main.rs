@@ -135,6 +135,7 @@ struct InternalApp {
     allocator: gpu_allocator::vulkan::Allocator,
     
     svo: SparseVoxelOctree,
+    svt: SparseVoxelTexture,
 
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
@@ -224,7 +225,11 @@ impl InternalApp {
                 instance: instance.clone(),
                 device: device.clone(),
                 physical_device: physical_device.clone(),
-                debug_settings: gpu_allocator::AllocatorDebugSettings::default(),
+                debug_settings: gpu_allocator::AllocatorDebugSettings {
+                    log_leaks_on_shutdown: false,
+                    log_frees: false,
+                    ..Default::default()
+                },
                 buffer_device_address: false,
                 allocation_sizes: gpu_allocator::AllocationSizes::default(),
             })
@@ -297,7 +302,7 @@ impl InternalApp {
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
-        let svo = voxel::create_sparse_voxel_octree(
+        let (svo, svt) = voxel::create_sparse_structures(
             &device,
             &mut allocator,
             &debug_marker,
@@ -306,7 +311,7 @@ impl InternalApp {
             descriptor_pool,
             queue_family_index
         );
-        log::info!("created sparse voxel octree buffers");
+        log::info!("created sparse voxel structures");
 
         log::info!("creating frames in flight structures...");
         let mut frames_in_flight = Vec::<PerFrameData>::new();
@@ -408,6 +413,7 @@ impl InternalApp {
             timestamp_period,
             allocator,
             svo,
+            svt,
             frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
@@ -823,45 +829,14 @@ impl InternalApp {
         self.render_compute_pipeline.destroy(&self.device);
         log::info!("destroyed render compute pipeline");
 
-        /*
-        self.tick_voxel_compute_pipeline.destroy(&self.device);
-        log::info!("destroyed tick voxel compute pipeline");
-
-        self.generate_voxel_compute_pipeline.destroy(&self.device);
-        log::info!("destroyed generate voxel compute pipeline");
-        */
-
-
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");
 
-        /*
-        self.voxel_image.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed voxel image");
-
-        self.device.destroy_image_view(self.voxel_surface_index_image.2, None);
-        self.device.destroy_image(self.voxel_surface_index_image.0, None);
-        self.allocator.free(self.voxel_surface_index_image.1).unwrap();
-        log::info!("destroyed voxel surface index image");
-
-        self.voxel_surface_buffer.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed voxel surface buffer");
-
-        self.voxel_surface_counter_buffer.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed voxel counter buffer");
-
-        self.visible_surface_buffer.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed visible surfaces buffer");
-
-        self.visible_surface_counter_buffer.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed visible surfaces counter buffer");
-
-        self.visible_surface_indirect_dispatch_buffer.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed indirect dispatch buffer");
-        */
-
         self.svo.destroy(&self.device, &mut self.allocator);
-        log::info!("destroyed SVO buffer");
+        log::info!("destroyed SVO buffers & stuff");
+
+        self.svt.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed SVT");
 
         self.device.destroy_query_pool(self.query_pool, None);
         log::info!("destroyed query pool");
@@ -901,6 +876,7 @@ impl InternalApp {
         self.device.destroy_command_pool(self.pool, None);
         log::info!("destroyed cmd pool");
 
+        drop(self.allocator);
         self.device.destroy_device(None);
         log::info!("destroyed device");
 
