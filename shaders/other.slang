@@ -16,11 +16,11 @@ float3 per_block_unique_colour(uint3 block_pos) {
 static const int SPARSE_GRANULARITY = 64;
 
 struct Fetcher {
-    Texture3D<uint8_t> svt;
-    Texture3D<uint8_t> svt_metadata;
+    RWTexture3D<uint8_t> svt;
+    RWTexture3D<uint8_t> svt_metadata;
 
     bool is_solid(uint3 pos) {
-        return svt_metadata.Load(uint4(pos / SPARSE_GRANULARITY, 0)) == 255 || svt.Load(uint4(pos, 0)) == 255;
+        return svt_metadata.Load(pos / SPARSE_GRANULARITY) == 255 || svt.Load(pos) == 255;
     }
 }
 

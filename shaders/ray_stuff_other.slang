@@ -56,8 +56,11 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     // ray will always be in the parent's working space, so we offset by the parent origin and clamp coords to [0..4)
     float3 modified_ray_pos = ((ray_pos + ray_dir * distance - parent_world_space_origin) / (float)voxel_size);
     modified_ray_pos = clamp(modified_ray_pos, EPS, 4 - EPS);
-    uint16_t3 floored_pos = (uint16_t3)floor(modified_ray_pos);
-    floored_pos = (uint16_t3)clamp(floored_pos, 0, 4);
+    
+    // yes technically you can repr this by a single byte and do packing/unpacking ops
+    // I tried that, it did not help perf.
+    int8_t3 floored_pos = (int8_t3)floor(modified_ray_pos);
+    floored_pos = (int8_t3)clamp(floored_pos, 0, 4);
 
     float3 side_dist = ((dir_sign * ((floored_pos - modified_ray_pos) + 0.5) + 0.5) * inv_dir);
     bool3 eqs = false;    

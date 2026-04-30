@@ -8,10 +8,10 @@
 RWTexture2D<float4> output;
 
 [[vk::binding(1, 0)]]
-Texture3D<uint8_t> svt;
+RWTexture3D<uint8_t> svt;
 
 [[vk::binding(2, 0)]]
-Texture3D<uint8_t> svt_metadata;
+RWTexture3D<uint8_t> svt_metadata;
 
 [[vk::binding(3, 0)]]
 StructuredBuffer<uint64_t> svo_bitmasks_buffer;
@@ -129,7 +129,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     stats.iterations += 1;
                     
                     float3 force_torwards_center = -(iterative_ray_pos - center);
-                    float3 normalized_force_torwards_center = force_torwards_center / pow(length(force_torwards_center), 2);
+                    float3 normalized_force_torwards_center = force_torwards_center / (pow(length(force_torwards_center) + 0.8, 8));
                     normalized_force_torwards_center *= (sin(time * 0.8) * 1.0);
 
                     iterative_ray_dir += normalized_force_torwards_center * dt * 0.3;

@@ -1,7 +1,4 @@
-#![allow(unused_variables)]
-#![allow(dead_code)]
 #![allow(unsafe_op_in_unsafe_fn)]
-#![allow(unused_imports)]
 
 mod assets;
 mod debug;
@@ -42,9 +39,7 @@ use winit::raw_window_handle::HasDisplayHandle;
 use winit::window::{Window, WindowId};
 use statistics::Statistics;
 
-use crate::buffer::*;
 use crate::pipeline::*;
-use crate::rays::*;
 use crate::voxel::*;
 
 
@@ -312,7 +307,6 @@ impl InternalApp {
             &debug_marker,
             queue,
             pool,
-            descriptor_pool,
             queue_family_index
         );
         log::info!("created sparse voxel structures");
@@ -962,6 +956,11 @@ impl ApplicationHandler for App {
 
                 if inner.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
                     inner.debug_type = (inner.debug_type + 1) % 6;
+                }
+
+                if inner.input.get_button(Button::Keyboard(KeyCode::KeyJ)).pressed() {
+                    let report = inner.allocator.generate_report();
+                    log::debug!("{:?}", report);
                 }
 
                 if inner.input.get_button(Button::Mouse(MouseButton::Middle)).held() {

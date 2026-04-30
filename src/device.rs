@@ -37,7 +37,8 @@ pub unsafe fn create_device_and_queue(
         .shader_float16(true)
         .shader_int8(true);
     let mut device_features_13 = vk::PhysicalDeviceVulkan13Features::default()
-        .synchronization2(true);
+        .synchronization2(true)
+        .maintenance4(true);
 
     let device_extension_names = [
         ash::khr::swapchain::NAME,

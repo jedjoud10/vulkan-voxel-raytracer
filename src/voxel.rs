@@ -1,10 +1,7 @@
-use std::{cell::RefCell, collections::VecDeque, ffi::{CStr, CString}, num::NonZeroU32, rc::{Rc, Weak}, str::FromStr, time::Instant};
-use crate::utils::*;
+use std::{ffi::CString, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use smallvec::SmallVec;
-use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
+use crate::{buffer::{self}};
 
 mod recursive;
 mod sparse;
@@ -22,7 +19,6 @@ pub unsafe fn create_sparse_structures(
     binder: &Option<ash::ext::debug_utils::Device>,
     queue: vk::Queue,
     pool: vk::CommandPool,
-    descriptor_pool: vk::DescriptorPool,
     queue_family_index: u32,
 ) -> (SparseVoxelOctree, SparseVoxelTexture) {
     // each node contains a u64 bitmask that checks if any of its children are leaf nodes
@@ -99,7 +95,7 @@ unsafe fn create_sparse_voxel_texture(
         })
         .format(vk::Format::R8_UINT)
         .image_type(vk::ImageType::TYPE_3D)
-        .initial_layout(vk::ImageLayout::GENERAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
         .mip_levels(1)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .flags(vk::ImageCreateFlags::SPARSE_RESIDENCY | vk::ImageCreateFlags::SPARSE_BINDING)
@@ -133,11 +129,6 @@ unsafe fn create_sparse_voxel_texture(
         panic!();
     };
 
-
-
-
-
-
     let extent_granularity = sparse_requirement.format_properties.image_granularity;
     
     // fuck it
@@ -149,12 +140,6 @@ unsafe fn create_sparse_voxel_texture(
     
     let mut sparse_image_memory_binds = Vec::<vk::SparseImageMemoryBind>::new();
 
-    let image_subresource= vk::ImageSubresource::default()
-        .mip_level(0)
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .array_layer(0);
-
-
     // create metadata image that will contain metadata info about sparse binding chunks
     // this one is NOT sparse
     let metadata_image_create_info = vk::ImageCreateInfo::default()
@@ -165,7 +150,7 @@ unsafe fn create_sparse_voxel_texture(
         })
         .format(vk::Format::R8_UINT)
         .image_type(vk::ImageType::TYPE_3D)
-        .initial_layout(vk::ImageLayout::GENERAL)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
         .mip_levels(1)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
@@ -173,7 +158,7 @@ unsafe fn create_sparse_voxel_texture(
         .queue_family_indices(&queue_family_indices)
         .tiling(vk::ImageTiling::OPTIMAL)
         .array_layers(1);
-    let metadata_image = device.create_image(&sparse_image_create_info, None).unwrap();
+    let metadata_image = device.create_image(&metadata_image_create_info, None).unwrap();
     let metadata_image_requirements = device.get_image_memory_requirements(metadata_image);
     
     // stores the origin of the chunk and offset in the `total_data_to_copy` buffer
@@ -182,6 +167,24 @@ unsafe fn create_sparse_voxel_texture(
     let mut total_data_to_copy = Vec::<u8>::new();
     let mut metadata_image_bytes = vec![0u8; (axis_num_bind_chunks*axis_num_bind_chunks*axis_num_bind_chunks) as usize];
     let mut offset_in_staging_buffer = 0;
+
+
+    let image_subresource_layers = vk::ImageSubresourceLayers::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .layer_count(1)
+        .mip_level(0)
+        .base_array_layer(0);
+    let image_subresource_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .layer_count(1)
+        .base_array_layer(0)
+        .level_count(1)
+        .base_mip_level(0);
+    let image_subresource= vk::ImageSubresource::default()
+        .mip_level(0)
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .array_layer(0);
+
 
     // create backing allocations for the binding chunks  
     for SparseImageChunk { origin, data, full } in chunks.iter() {
@@ -239,14 +242,14 @@ unsafe fn create_sparse_voxel_texture(
     // create allocation for metadata image and upload stuff to it
     let metadata_image_allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-            name: &format!("wtf to name this"),
+            name: &format!("Metadata Image Allocation"),
             requirements: metadata_image_requirements,
             linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedImage(metadata_image),
             location: gpu_allocator::MemoryLocation::GpuOnly,
         })
         .unwrap();
-
+    device.bind_image_memory(metadata_image, metadata_image_allocation.memory(), metadata_image_allocation.offset()).unwrap();
 
     // create staging buffer to copy metadata  texel data 
     let (metadata_staging_buffer, metadata_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &metadata_image_bytes);
@@ -256,12 +259,7 @@ unsafe fn create_sparse_voxel_texture(
 
     // create the actual memory copies depending on binding chunks
     let mut buffer_image_copies = Vec::<vk::BufferImageCopy>::new();
-    
-    let image_subresource_layers = vk::ImageSubresourceLayers::default()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .layer_count(1)
-        .mip_level(0)
-        .base_array_layer(0);
+
     for (origin, offset) in binding_chunks {
         buffer_image_copies.push(vk::BufferImageCopy::default()
             .buffer_offset(offset as u64)
@@ -280,8 +278,6 @@ unsafe fn create_sparse_voxel_texture(
     let binds = [vk::BindSparseInfo::default().image_binds(&sparse_image_memory_bind_info)];
     device.queue_bind_sparse(queue, &binds, vk::Fence::null()).unwrap();
 
-
-
     // create command buffer
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
         .command_buffer_count(1)
@@ -291,6 +287,33 @@ unsafe fn create_sparse_voxel_texture(
         .allocate_command_buffers(&cmd_buffer_create_info)
         .unwrap()[0];
     device.begin_command_buffer(cmd, &Default::default()).unwrap();
+
+    // transfer image layouts from undefined to general
+    let sparse_image_layout_transition = vk::ImageMemoryBarrier2::default()
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .src_access_mask(vk::AccessFlags2::empty())
+        .dst_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_queue_family_index(queue_family_index)
+        .dst_queue_family_index(queue_family_index)
+        .image(sparse_image)
+        .subresource_range(image_subresource_range);
+    let metadata_image_layout_transition = vk::ImageMemoryBarrier2::default()
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .src_access_mask(vk::AccessFlags2::empty())
+        .dst_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_queue_family_index(queue_family_index)
+        .dst_queue_family_index(queue_family_index)
+        .image(metadata_image)
+        .subresource_range(image_subresource_range);
+    let image_memory_barriers = [sparse_image_layout_transition, metadata_image_layout_transition];
+    let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+    device.cmd_pipeline_barrier2(cmd, &dep);
 
     // do the sparse staging buffer to sparse image copy
     device.cmd_copy_buffer_to_image(cmd, sparse_staging_buffer, sparse_image, vk::ImageLayout::GENERAL, &buffer_image_copies);
