@@ -65,12 +65,12 @@ fn menger_like(base: u32, seed: u32) -> RecursiveNode {
     for (dst_index, child) in generated_children {
         children[*dst_index as usize] = Some(child);
     }
-    let full = children.iter().all(|child| child.as_ref().map(|c| c.full).unwrap_or_default());
+    //let full = children.iter().all(|child| child.as_ref().map(|c| c.full).unwrap_or_default());
     
     RecursiveNode {
         children: Some(Box::new(children)),
         bottom: base == 1,
-        full: full, 
+        full: false, 
     }
 }
 
@@ -135,10 +135,17 @@ fn spike(base: u32, cx: usize, cz: usize, seed: u32) -> RecursiveNode {
 
     for x in 0..4 {
         for y in 0..4 {
-            for z in 0..4 {
+            for z in 1..3 {
                 let vec = vek::Vec3::new(x,y,z);
                 let i = x + y * 4 + z * 4 * 4;
 
+                if y < 3 {
+                    children[i] = Some(Box::new(full_node()));
+                } else {
+                    recursive.push((i as u8, cx, cz));
+                }
+
+                /*
                 if (pseudo_random(0x44AB ^ base ^ seed ^ (z as u32) ^ (x as u32 + 534243)) % 5 < 2) {
                     if y < 3 {
                         children[i] = Some(Box::new(full_node()));
@@ -150,6 +157,7 @@ fn spike(base: u32, cx: usize, cz: usize, seed: u32) -> RecursiveNode {
                         }
                     }
                 }
+                */
             }
         }
     }
@@ -183,6 +191,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
 
     let mut children = [const { None }; 64];
 
+    
     // small chance to exit early
     if (pseudo_random(0xA23 ^ base ^ seed) % 10) < 2 {
         return RecursiveNode {

@@ -8,9 +8,15 @@
 RWTexture2D<float4> output;
 
 [[vk::binding(1, 0)]]
-StructuredBuffer<uint64_t> svo_bitmasks_buffer;
+Texture3D<uint8_t> svt;
 
 [[vk::binding(2, 0)]]
+Texture3D<uint8_t> svt_metadata;
+
+[[vk::binding(3, 0)]]
+StructuredBuffer<uint64_t> svo_bitmasks_buffer;
+
+[[vk::binding(4, 0)]]
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
 
@@ -20,6 +26,10 @@ StructuredBuffer<uint32_t> svo_indices_buffer;
 [SpecializationConstant] const bool AMBIENT_OCCLUSION = false;
 [SpecializationConstant] const bool WAVY_REFLECTIONS = false;
 [SpecializationConstant] const bool PIXELATED_SHADOWS = false;
+
+
+// TODO: pass this from CPU and don't hard code
+static const int SPARSE_GRANULARITY = 64;
 
 
 enum DebugType: uint {
@@ -39,6 +49,41 @@ float3 heatmap(float t) {
         1.5 - abs(4.0 * t - 1.0)
     ), 0.0, 1.0);
 }
+
+
+bool dd12a2<let N : int>(
+    float3 ray_dir,
+    float3 ray_pos,
+    out int iteration,
+) {
+    half3 inv_dir = (half3)1.0 / abs(ray_dir);
+    int8_t3 dir_sign = (int8_t3)sign(ray_dir);
+    uint16_t3 floored_pos = (uint16_t3)floor(ray_pos);
+    float3 side_dist = ((dir_sign * (floored_pos - ray_pos) + dir_sign * 0.5 + 0.5) * inv_dir);
+    bool3 eqs = false;
+
+    [loop]
+    for (int i = 0; i < N; i++) {
+        iteration = i;
+        if (any(floored_pos < 0 | floored_pos >= 1024)) {
+            return false;
+        }
+
+
+        if (svt.Load(uint4(floored_pos, 0)) == 255 || svt_metadata.Load(uint4(floored_pos / SPARSE_GRANULARITY, 0)) == 255) {
+            float local_dist = length(select(eqs, 1.0, 0.0) * (side_dist - inv_dir)) - 0.05;
+            return true;
+        }
+
+        eqs = min3(side_dist.x, side_dist.y, side_dist.z) == side_dist;
+        side_dist += select(eqs, inv_dir, (half3)0);
+        floored_pos += select(eqs, dir_sign, (int16_t3)0);
+    }
+
+
+    return false;
+}
+
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -63,6 +108,14 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float3 nth_world = 0.0;
     
     float3 color = 1.0;
+    
+    int iter = 0;
+    if (dd12a2<1024>(ray_dir, ray_pos, iter)) {
+        output[id.xy] = (float)iter / 1024;
+    } else {
+        output[id.xy] = 0.0;
+    }
+    return;
 
     [loop]
     for (int i = 0; i < MAX_ITERATIONS; i++) {
@@ -89,19 +142,24 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
 
             float3 diffuse = 1.0;
+
+            if (svt.Load(uint4((uint3)block_pos, 0)) == 255) {
+                diffuse = 0.1;
+            }
+
             float roughness = 0.50;
             float special = 0;
             float metallic = 0;
             
             // pick random colour
             if (block_pos.x > TOTAL_SIZE / 2) {
-                diffuse = lerp(per_block_unique_colour(block_pos), 1, 0.5);
+                //diffuse = lerp(per_block_unique_colour(block_pos), 1, 0.5);
             }
 
             // pick random roughness + metallic
             if (block_pos.z > TOTAL_SIZE / 2) {
-                roughness = hash13(block_pos * float3(3.23123, 5.23423, -5.234234));
-                metallic = hash13(block_pos * float3(132.12312, -2321.32132, 3.2132));
+                //roughness = hash13(block_pos * float3(3.23123, 5.23423, -5.234234));
+                //metallic = hash13(block_pos * float3(132.12312, -2321.32132, 3.2132));
             }
 
             // pick random special mirror block

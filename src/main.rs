@@ -626,6 +626,14 @@ impl InternalApp {
             .image_view(src_image_view)
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
+        let descriptor_svt_image_info = vk::DescriptorImageInfo::default()
+            .image_view(self.svt.sparse_image_view)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .sampler(vk::Sampler::null());
+        let descriptor_svt_metadata_image_info = vk::DescriptorImageInfo::default()
+            .image_view(self.svt.metadata_image_view)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .sampler(vk::Sampler::null());
         let descriptor_svo_bitmasks_info = vk::DescriptorBufferInfo::default()
             .buffer(self.svo.bitmask_buffer.buffer)
             .offset(0)
@@ -635,19 +643,19 @@ impl InternalApp {
             .offset(0)
             .range(u64::MAX);
 
-        let descriptor_rt_image_infos = [descriptor_rt_image_info];
+        let descriptor_image_infos = [descriptor_rt_image_info, descriptor_svt_image_info, descriptor_svt_metadata_image_info];
         let descriptor_svo_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
 
         let image_descriptor_write = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
+            .descriptor_count(descriptor_image_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
             .dst_set(render_descriptor_set)
-            .image_info(&descriptor_rt_image_infos);
+            .image_info(&descriptor_image_infos);
         let buffer_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .dst_binding(1)
+            .dst_binding(3)
             .dst_set(render_descriptor_set)
             .buffer_info(&descriptor_svo_infos);
         

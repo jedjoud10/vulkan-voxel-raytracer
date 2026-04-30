@@ -132,7 +132,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
 
         // we know that floored pos is the local coordinate directly anyways
         uint8_t3 local = (uint8_t3)floored_pos;
-        uint8_t bit_index = local.z | local.y << 2 | local.x << 4;
+        uint8_t bit_index = local.x | local.y << 2 | local.z << 4; 
 
         // world space position of the node origin
         uint16_t3 origin = parent_world_space_origin + floored_pos * voxel_size;

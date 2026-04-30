@@ -105,18 +105,30 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
-    let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
+    let svt_image = vk::DescriptorSetLayoutBinding::default()
         .binding(1)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let svt_meta_image = vk::DescriptorSetLayoutBinding::default()
+        .binding(2)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
+        .binding(3)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
     let svo_indices = vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
+        .binding(4)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
     let bindings = [
         output,
+        svt_image,
+        svt_meta_image,
         svo_bitmasks,
         svo_indices,
     ];

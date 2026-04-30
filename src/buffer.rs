@@ -127,33 +127,7 @@ pub unsafe fn write_to_buffer(
         None
     } else {
         log::info!("writing {} to buffer, using staging buffer path", bytes_formatted.display().si());
-        // staging buffer impl
-        let staging_buffer_create_info = vk::BufferCreateInfo::default()
-            .flags(vk::BufferCreateFlags::empty())
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .size(bytes.len() as u64);
-
-        let staging_buffer = device.create_buffer(&staging_buffer_create_info, None).unwrap();
-
-        let requirements = device.get_buffer_memory_requirements(staging_buffer);
-        let mut allocation = allocator
-            .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-                name: "Staging Buffer",
-                requirements: requirements,
-                linear: true,
-                allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(staging_buffer),
-                location: gpu_allocator::MemoryLocation::CpuToGpu,
-            })
-            .unwrap();
-
-        let device_memory = allocation.memory();
-        device.bind_buffer_memory(staging_buffer, device_memory, allocation.offset()).unwrap();
-        
-        let dst_slice = allocation.mapped_slice_mut().unwrap();
-
-        // FIXME: for some reason on nvidia the slice has different size? shouldn't gpu_allocator handle this type of stuff...
-        dst_slice[..(bytes.len())].copy_from_slice(bytes);
+        let (staging_buffer, allocation) = create_staging_buffer(device, allocator, bytes);
 
         let region = vk::BufferCopy2::default()
             .dst_offset(0)
@@ -190,6 +164,37 @@ pub unsafe fn write_to_buffer(
 
     let end = std::time::Instant::now();
     log::debug!("buffer write took {}μs", (end-start).as_micros());
+}
+
+pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Allocator, bytes: &[u8]) -> (vk::Buffer, Allocation) {
+    // staging buffer impl
+    let staging_buffer_create_info = vk::BufferCreateInfo::default()
+        .flags(vk::BufferCreateFlags::empty())
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .size(bytes.len() as u64);
+
+    let staging_buffer = device.create_buffer(&staging_buffer_create_info, None).unwrap();
+
+    let requirements = device.get_buffer_memory_requirements(staging_buffer);
+    let mut allocation = allocator
+        .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
+            name: "Staging Buffer",
+            requirements: requirements,
+            linear: true,
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(staging_buffer),
+            location: gpu_allocator::MemoryLocation::CpuToGpu,
+        })
+        .unwrap();
+
+    let device_memory = allocation.memory();
+    device.bind_buffer_memory(staging_buffer, device_memory, allocation.offset()).unwrap();
+        
+    let dst_slice = allocation.mapped_slice_mut().unwrap();
+
+    // FIXME: for some reason on nvidia the slice has different size? shouldn't gpu_allocator handle this type of stuff...
+    dst_slice[..(bytes.len())].copy_from_slice(bytes);
+    (staging_buffer, allocation)
 }
 
 
