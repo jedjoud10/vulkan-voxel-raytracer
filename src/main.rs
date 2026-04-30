@@ -82,6 +82,11 @@ struct Args {
     /// Setting to start in fullscreen from the start. This can be toggled in-game using F5
     #[arg(long, default_value_t = false)]
     fullscreen: bool,
+
+    /// Group size exponent used for the main ray-tracing shader. Ex a value of 3 means using 2^3=8, a group size of 8x8
+    /// TODO: find better name for this
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=5))]
+    group_size_exp: u32,
 }
 
 struct PerFrameData {
@@ -147,9 +152,7 @@ struct InternalApp {
 impl InternalApp {
     pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
         let mut assets = HashMap::<&str, &[u32]>::new();
-        asset!("raymarcher.spv", assets);
-        asset!("voxel_tick.spv", assets);
-        asset!("voxel_generate.spv", assets);
+        asset!("raytracer.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -298,8 +301,9 @@ impl InternalApp {
             ambient_occlusion: if args.ambient_occlusion { 1 } else { 0 }, 
             wavy_reflections: if args.wavy_reflections { 1 } else { 0 }, 
             pixelated_shadows: if args.pixelated_shadows { 1 } else { 0 }, 
+            group_size: 2u32.pow(args.group_size_exp),
         };
-        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raymarcher.spv"], &device, &debug_marker, spec_constants);
+        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raytracer.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
         let (svo, svt) = voxel::create_sparse_structures(
@@ -679,7 +683,7 @@ impl InternalApp {
         let size = vek::Vec2::<u32>::new(size.width, size.height)
             .map(|val| val / self.args.resolution_scaling_factor);
 
-        let group_size = 8 as f32;
+        let group_size = 2u32.pow(self.args.group_size_exp) as f32;
         let width_group_size = (size.x as f32 / group_size).ceil() as u32;
         let height_group_size = (size.y as f32 / group_size).ceil() as u32;
         let size_f32 = size.map(|x| x as f32);

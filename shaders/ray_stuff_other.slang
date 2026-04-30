@@ -20,75 +20,13 @@ static const uint32_t BOTTOM_NODE = 0xFFFFFFFF;
 static const uint32_t FULL_NODE = 0xFFFFFFFF-1; 
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
-/*
-bool is_solid_recurse<let K: int>(
-    uint32_t base_index,
-    uint64_t raw,
-    uint3 world_pos,
-    uint16_t3 parent_world_space_origin,
-    SparseVoxelOctree svo
-) {
-    // quick check
-    if (any(world_pos < 0 | world_pos >= TOTAL_SIZE)) {
-        return false;
-    }
 
-    uint16_t voxel_size = (uint16_t)1 << max(K*2, 0);
-
-    uint3 local_to_parent_pos = world_pos;
-    local_to_parent_pos -= parent_world_space_origin / voxel_size;
-    local_to_parent_pos = clamp(local_to_parent_pos, 0, 3);
-    uint8_t bit_index = local_to_parent_pos.z | local_to_parent_pos.y << 2 | local_to_parent_pos.x << 4;
-
-    [branch]
-    if ((bit_index < 64 && ((raw >> bit_index) & 1) == 1)) {  
-        [branch]
-        if (K > 0 && base_index != BOTTOM_NODE && lod_check) {
-            // calculate child offset index, which is NOT the same as the bit index
-            // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
-            // create a mask for the first `n` bits
-            uint64_t mask = ((uint64_t)1 << bit_index) - 1;
-            uint32_t child_offset_index = (uint32_t)countbits(mask & raw);
-
-
-            // POSSIBLE OPTIMIZATION: store a "delta offset" compared to the base node, which could allow us to encode this as a u16 instead...
-            //    - we can store the starting index for an entire level (depth=0,1,2,3,...) of the tree in a wayyy smaller buffer and use that as an offsetter as well, since we know that child indices are greater than parent indices!
-            // this should allow us to use u16, even though we have an extra buffer fetch, but that one should be cheap because it is depth based (uses `K`, compiler should store that in scalar mem)
-            uint32_t actual_child_index = base_index + child_offset_index;
-            uint32_t new_base_index = svo.indices_buffer[actual_child_index];
-
-            // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
-            if (new_base_index == FULL_NODE || K <= END) {
-                stats.exit_type = 2;
-                return dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, true, face, stats);
-            }
-
-            // TODO:
-            // ANOTHER POSSIBLE OPTIMIZATION: have a separate "5-bvh" mode for nodes if we can construct proper bvhs for them during traversal
-            // for super flat / planar nodes, this should work in our favour because it could represent the entire brick node (u64) in wayyy less memory
-            // assuming AABB bounds are quantized (2 bits per axii, since we use the range 0..4), a single AABB would take 2*3 * 2 = 12 bits
-            // we can store 5 BVHs in one u64, but we can do better than; we can store them separately in their own buffer
-            //    this way, if we have < 5 BVHs for the node, we don't need to fetch 64 whole bits!
-            // each BVH would need to store data to its children nodes though... fuck
-            // ok solution: each BVH node also contains a COUNT and CHILD OFFSET. since we can have up to 64 children in a single node, both these values must be represented by 6 bits
-            // we can order the children in `svo.indices_buffer` and `svo.bitmasks_buffer` to our own liking afterwards, they don't need to follow the z-y-x bitmask DDA order
-            // each BVH thing would then need 2*3 * 2 + 6 + 6 = 24 bits fuck.... WAIT IM FUCKING STUPID CHILD COUNT IS THE VOLUME OF THE BVH ITSELF
-            // bruh
-            // ok 6 bits removed, down to 18... we just need... to get rid of 2 more bits........ argh.....
-            // easiest solution is to use less bits for the offset. that would limit the number of bhv nodes in total if we have a bunch of ones that only use a few nodes but should be fine
-            // 2*3*2 + 4 = 16 bits YAY!!!!!!
-            // we can then do a different intersection test using those BVH nodes instead, should be cheaper than traversing a nearly empty DDA cell 
-            uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-            stats.buffer_fetches += 1;
-
-            var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, false, face, stats);
-            if (result.hit) {
-                return result;
-            }
-        }
-    }
+struct DdaTraversalOutput {
+    bool hit;
+    float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
+    uint3 block_pos; // this is always 100% accurate when we reach the bottom most node of the acceleration structure
+    uint8_t face;
 }
-*/
 
 // TODO: OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE OPTIMIZE
 // 1. optimize occupancy, we still have buffer latency left to hide
@@ -106,6 +44,11 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     uint8_t face,
     inout Statistics stats,
 ) {
+    /*
+    if (WaveActiveCountBits(true) < 16) {
+        return DdaTraversalOutput(false);
+    }
+    */
 
     uint16_t voxel_size = (uint16_t)1 << max(K*2, 0);
     
@@ -300,7 +243,7 @@ float calculate_aabb_overlap<let K : int>(
                 uint16_t3 origin = parent_world_space_origin + localt * voxel_size;
 
                 uint8_t3 local = (uint8_t3)localt;
-                uint8_t bit_index = local.z | local.y << 2 | local.x << 4;
+                uint8_t bit_index = local.x | local.y << 2 | local.z << 4;
 
                 statistics.iterations += 1;
 
@@ -335,7 +278,6 @@ float calculate_aabb_overlap<let K : int>(
 
     return sum;
 }
-
 DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
     float3 ray_pos,
     float3 ray_dir,
@@ -352,7 +294,7 @@ DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
 }
 
 
-float cube_trace_shi(
+float cube_overlap_density_svo(
     float3 cube_pos,
     float cube_half_length,
     SparseVoxelOctree svo,
@@ -360,4 +302,76 @@ float cube_trace_shi(
 ) {
     float total_volume = pow(cube_half_length*2, 3);
     return calculate_aabb_overlap<DEPTH - 1>(1, svo.bitmasks_buffer[0], cube_pos, cube_half_length, svo, 0, iter) / total_volume;
+}
+
+float cube_overlap_density_svt(
+    float3 cube_pos,
+    float cube_half_length,
+    Fetcher fetcher,
+    inout Statistics statistics,
+) {
+    float total_volume = pow(cube_half_length*2, 3);
+    int k = ceil(cube_half_length);
+
+    float sum = 0.0;
+
+    [loop]
+    for (int x = -k; x <= k; x++) {
+        [loop]
+        for (int y = -k; y <= k; y++) {
+            [loop]
+            for (int z = -k; z <= k; z++) {
+                int3 localt = int3(x,y,z);               
+                                
+                statistics.iterations += 1;
+
+                uint16_t3 pos = cube_pos + int16_t3(x,y,z);
+                if (fetcher.is_solid(pos)) {
+                    sum += volume_aabb_aabb_overlap(pos, pos + 1, cube_pos, cube_half_length);
+                }
+            }
+        }    
+    }
+
+    return sum / total_volume;
+}
+
+float planar_overlap_density_svt(
+    float3 plane_pos,
+    float plane_half_length,
+    int axis, // 1,2,3
+    Fetcher fetcher,
+    inout Statistics statistics,
+) {
+    float total_volume = pow(plane_half_length*2, 2);
+    int k = ceil(plane_half_length);
+
+    float sum = 0.0;
+
+    [loop]
+    for (int x = -k; x <= k; x++) {
+        [loop]
+        for (int y = -k; y <= k; y++) {
+            statistics.iterations += 1;
+
+            int16_t3 offset = 0;
+            if (axis == 0) {
+                offset.y = x;
+                offset.z = y;
+            } else if (axis == 1) {
+                offset.x = x;
+                offset.z = y;
+            } else if (axis == 2) {
+                offset.x = x;
+                offset.y = y;
+            }
+
+            uint16_t3 pos = plane_pos + offset;
+            if (fetcher.is_solid(pos)) {
+                sum += volume_aabb_aabb_overlap(pos, pos + 1, plane_pos, plane_half_length);
+            }
+        }    
+    }
+
+    return sum / total_volume;
 }

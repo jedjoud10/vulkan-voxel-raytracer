@@ -91,7 +91,7 @@ impl SparseVoxelOctree {
         while let Some(node) = current.take() {
             let size = 1 << (node.height*2);
             
-            log::trace!("depth: {}, origin: {}, size: {}, bottom: {}", node.height, node.origin, size, self.nodes[node.index].bottom);
+            log::trace!("depth: {}, origin: {}, size: {}", node.height, node.origin, size);
             let child_offset = (pos - node.origin) / vek::Vec3::broadcast(size);
             log::trace!("child offset: {}", child_offset);
 
@@ -111,7 +111,6 @@ impl SparseVoxelOctree {
             } else {
                 self.nodes.push(FlatNode {
                     children: None,
-                    bottom: node.height == 1,
                     full: false,
                 });
                 let idx = self.nodes.len()-1;
@@ -159,7 +158,6 @@ impl SparseVoxelOctree {
                     if i != child_index_relative as usize /* && self.nodes[node.index].children.as_ref().unwrap()[i].is_none() */ {
                         nodes.push(FlatNode {
                             children: None,
-                            bottom: node.height == 1,
                             full: true,
                         });
                         let idx = nodes.len()-1;
@@ -245,7 +243,6 @@ struct TopDownTraversalNode {
 // TODO: optimize space using NonZero and bitmasks for bottom&full
 pub struct FlatNode {
     pub children: Option<Box<[Option<usize>; 64]>>,
-    pub bottom: bool, // FIXME: do we even need this? traversal can keep track of depth itself... we don't need it...
     pub full: bool,
 }
 
@@ -258,7 +255,7 @@ struct BottomUpPath {
 
 struct TraversalNode<'a> {
     node: &'a FlatNode,
-    depth: usize,
+    height: u32,
     parent_base_child_index: Option<usize>,
     self_packed_child_offset: usize,
 }
@@ -266,21 +263,17 @@ struct TraversalNode<'a> {
 pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
     let start = Instant::now();
     let mut queue = VecDeque::<TraversalNode>::new();
-    queue.push_back(TraversalNode { node: &nodes[0], depth: 0, parent_base_child_index: None, self_packed_child_offset: 0 });
+    queue.push_back(TraversalNode { node: &nodes[0], height: SVO_DEPTH, parent_base_child_index: None, self_packed_child_offset: 0 });
 
     let mut bitmask_vec = Vec::<u64>::new();
     let mut index_vec = Vec::<u32>::new();
     let mut nodes_visited = 0;
     let mut test_count = 0u32;
-    let mut base_indices_for_depth = Vec::<u32>::new();
+    let mut base_indices_for_height = vec![0u32; SVO_DEPTH as usize + 1];
 
-    while let Some(TraversalNode { node, depth, parent_base_child_index: parent_index, self_packed_child_offset  }) = queue.pop_front() {
-        // keeps track of the "base" indinces where we start a specific AS hierarchy level
-        if base_indices_for_depth.len() < (depth+1) {
-            base_indices_for_depth.push(nodes_visited);
-        }
-
+    while let Some(TraversalNode { node, height, parent_base_child_index: parent_index, self_packed_child_offset  }) = queue.pop_front() {
         let self_index = index_vec.len();
+        base_indices_for_height[height as usize] += 1;
         
         // VERIFY: makes sure that the packed child index matches up
         if let Some(parent) = parent_index {
@@ -297,7 +290,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
         let mut base_child_index = test_count + 1;
 
         // check if we are handling the base case
-        if node.bottom {
+        if height == 0 {
             base_child_index = BOTTOM_NODE;
             if node.children.is_none() {
                 bitmask = u64::MAX;
@@ -310,7 +303,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
                 // node is not full, we must compute bitmask of children and stuff
                 if let Some(children) = node.children.as_ref() {
                     for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
-                        queue.push_back(TraversalNode { node: &nodes[*child], depth: depth + 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
+                        queue.push_back(TraversalNode { node: &nodes[*child], height: height - 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
                         test_count += 1;
 
                         // VERIFY: makes sure that the packed child index matches up
@@ -331,7 +324,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
     const CALCULATE_SAH: bool = false;
 
     log::debug!("base indices for depths:");
-    for (i, base_index) in base_indices_for_depth.iter().enumerate() {
+    for (i, base_index) in base_indices_for_height.iter().enumerate() {
         log::debug!(" - depth {i}: {base_index}");
     }
 

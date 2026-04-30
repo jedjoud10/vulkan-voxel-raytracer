@@ -75,7 +75,7 @@ struct ao_solver {
             offset[target_face] = -offset[target_face];
         }
 
-        return face == target_face && fetcher.fetch(pos + offset).active;
+        return face == target_face && fetcher.is_solid(pos + offset);
     }
 
     float check_axis(int i, int a, int b) {

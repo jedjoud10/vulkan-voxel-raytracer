@@ -74,12 +74,13 @@ fn main() {
 
     let session_options = CompilerOptions::default()
         .optimization(OptimizationLevel::Maximal)
-        .debug_information(DebugInfoLevel::Standard)
+        .debug_information(DebugInfoLevel::None)
         .obfuscate(false)
         .no_mangle(true)
         .disable_specialization(false)
         .vulkan_use_entry_point_name(true)
-        .matrix_layout_row(true);
+        .matrix_layout_row(true)
+        .emit_spirv_directly(true);
 
     
     let target_desc = TargetDesc::default().format(CompileTarget::Spirv);

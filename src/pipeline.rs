@@ -81,6 +81,7 @@ pub struct RenderPipelineSpecConstants {
     pub ambient_occlusion: u32,
     pub wavy_reflections: u32,
     pub pixelated_shadows: u32,
+    pub group_size: u32,
 }
 
 pub unsafe fn create_render_compute_pipeline(

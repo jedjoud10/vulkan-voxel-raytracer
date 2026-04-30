@@ -44,7 +44,7 @@ fn test_indexing_stuff() {
 
 struct SimpleTraversalNode<'a> {
     node: &'a FlatNode,
-    height: usize,
+    height: u32,
     origin: vek::Vec3<u32>,
 }
 
@@ -69,7 +69,7 @@ pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3
 
         let pixel_coordinate_in_chunk = origin - chunk_origin;
 
-        if node.bottom {
+        if height == 0 {
             // height could either be 0 (i.e single voxel) or 1 (i.e brick of 4x4x4)
             if height == 0 {
                 let global = pixel_coordinate_in_chunk.as_::<usize>();
@@ -132,7 +132,7 @@ pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3
 // hard-coded chunk granularity of 64x64x64
 pub fn convert_to_sparse_image_chunks(nodes: &[FlatNode]) -> Vec<SparseImageChunk> {
     let mut queue = VecDeque::<SimpleTraversalNode>::new();
-    queue.push_back(SimpleTraversalNode { node: &nodes[0], height: SVO_DEPTH as usize, origin: vek::Vec3::zero() });
+    queue.push_back(SimpleTraversalNode { node: &nodes[0], height: SVO_DEPTH, origin: vek::Vec3::zero() });
 
     let mut binding_chunks = Vec::<SparseImageChunk>::new();
 
@@ -149,8 +149,9 @@ pub fn convert_to_sparse_image_chunks(nodes: &[FlatNode]) -> Vec<SparseImageChun
 
         let size: u32 = 4u32.pow(height as u32);
 
-        if node.bottom {
-            // TODO
+        if height == 0 {
+            // should never reach this???
+            panic!();
         } else {
             if node.full {
                 // FIXME
@@ -198,7 +199,7 @@ pub fn convert_recursive_to_flat_map(node: RecursiveNode) -> Vec<FlatNode> {
     queue.push_back(ConvertTraversalNode { node: &node, parent_index: usize::MAX, child_index_relative: 0 });
 
     while let Some(ConvertTraversalNode { node, parent_index, child_index_relative }) = queue.pop_front() {
-        map.push(FlatNode { children: None, bottom: node.bottom, full: node.full });
+        map.push(FlatNode { children: None, full: node.full });
         let index = map.len() - 1;
 
         if parent_index != usize::MAX {

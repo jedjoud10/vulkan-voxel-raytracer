@@ -11,6 +11,7 @@
 - Crisp ray-traced shadows or pixelated shadows
 - *Better* ambient-occlusion approximation using a hacked-together cone/cube-tracing implementation (WIP)
 - Incremental SVO updates on the CPU, and manual updates to the GPU buffer after every update (does a full rebuild of the AS)
+- Vulkan Sparse Resident Textures to check whether or not a voxel is set in constant time (does not require traversing the full AS)
 
 ## Things I Tried
 - Implement *octree* / *BHV* as a basic acceleration structure.
