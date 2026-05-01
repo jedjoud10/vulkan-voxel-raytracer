@@ -124,9 +124,8 @@ pub unsafe fn create_temporary_target_render_image(
         })
         .unwrap();
 
-    let device_memory = allocation.memory();
     device
-        .bind_image_memory(rt_image, device_memory, 0)
+        .bind_image_memory(rt_image, allocation.memory(), allocation.offset())
         .unwrap();
 
     if let Some(binder) = binder {

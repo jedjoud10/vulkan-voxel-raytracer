@@ -48,7 +48,7 @@ use crate::voxel::*;
 struct Args {
     /// Factor to use to decrease the screen resolution
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4))]
-    resolution_scaling_factor: u32,
+    downscale_factor: u32,
 
     /// Number of shadow samples to use. Set to 0 to disable shadows completely. Set to 1 to use hard-shadows.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(0..=16))]
@@ -102,9 +102,8 @@ struct InternalApp {
 
     input: Input,
     movement: Movement,
-
-    window: Window,
     entry: ash::Entry,
+    window: Window,
     device: ash::Device,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -276,7 +275,7 @@ impl InternalApp {
                     queue_family_index,
                     extent,
                     &debug_marker,
-                    args.resolution_scaling_factor,
+                    args.downscale_factor,
                     c"temporary render target image"
                 )
             })
@@ -432,9 +431,6 @@ impl InternalApp {
         log::warn!("resizing! width: {width}, height: {height}");
         self.device.device_wait_idle().unwrap();
 
-        self.swapchain_loader
-            .destroy_swapchain(self.swapchain, None);
-
         for frame in self.frames_in_flight.iter_mut() {
             self.device.destroy_image_view(frame.dst_image_view, None);
             self.device.destroy_image_view(frame.src_image_view, None);
@@ -442,6 +438,9 @@ impl InternalApp {
             self.device.destroy_image(frame.rt_image, None);
             self.allocator.free(frame.rt_image_allocation.take().unwrap()).unwrap();
         }
+
+        self.swapchain_loader
+            .destroy_swapchain(self.swapchain, None);
 
         let extent = vk::Extent2D { width, height };
 
@@ -476,7 +475,7 @@ impl InternalApp {
                     self.queue_family_index,
                     extent,
                     &self.debug_marker,
-                    self.args.resolution_scaling_factor,
+                    self.args.downscale_factor,
                     c"temporary render target image"
                 )
             })
@@ -531,7 +530,6 @@ impl InternalApp {
         let PerFrameData {
             swapchain_image,
             rt_image,
-            rt_image_allocation,
             present_complete_semaphore,
             end_fence,
             cmd,
@@ -582,15 +580,6 @@ impl InternalApp {
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
         //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
-
-        let push_constants = PushConstants2 {
-            forward: vek::Mat4::from(self.movement.rotation).mul_direction(-vek::Vec3::unit_z()).with_w(0.0f32),
-            position: self.movement.position.with_w(0.0f32),
-            sun: self.sun.normalized().with_w(0f32),
-            tick: self.ticker.count,
-            delta: delta.max(1f32 / ticker::TICKS_PER_SECOND),
-        };
-
 
         let subresource_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -675,7 +664,7 @@ impl InternalApp {
 
         let size = self.window.inner_size();
         let size = vek::Vec2::<u32>::new(size.width, size.height)
-            .map(|val| val / self.args.resolution_scaling_factor);
+            .map(|val| val / self.args.downscale_factor);
 
         let group_size = 2u32.pow(self.args.group_size_exp) as f32;
         let width_group_size = (size.x as f32 / group_size).ceil() as u32;
@@ -725,8 +714,8 @@ impl InternalApp {
 
         let origin_offset = vk::Offset3D::default();
         let src_extent_offset = vk::Offset3D::default()
-            .x(self.window.inner_size().width as i32 / self.args.resolution_scaling_factor as i32)
-            .y(self.window.inner_size().height as i32 / self.args.resolution_scaling_factor as i32)
+            .x(self.window.inner_size().width as i32 / self.args.downscale_factor as i32)
+            .y(self.window.inner_size().height as i32 / self.args.downscale_factor as i32)
             .z(1);
         let dst_extent_offset = vk::Offset3D::default()
             .x(self.window.inner_size().width as i32)
@@ -893,6 +882,9 @@ impl InternalApp {
 
         self.instance.destroy_instance(None);
         log::info!("destroyed instance");
+
+        drop(self.entry); // DO NOT REMOVE ENTRY FROM STRUCT. NEEDED!!!
+        log::info!("everything is done!");
     }
 }
 

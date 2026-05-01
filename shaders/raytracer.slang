@@ -165,15 +165,16 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 if (AMBIENT_OCCLUSION) {
                     ao = 0;
 
+                    /*
                     ao_solver solver = ao_solver(Fetcher(svt, svt_metadata), block_pos, world-block_pos, ray.face, sign(iterative_ray_dir));
                     ao = lerp(solver.ao(), 1, 0.8);
-
+                    */
                     /*
                     [loop]
-                    for (int j = 0; j < 5; j++) {
+                    for (int j = 0; j < 2; j++) {
                         //ao += cube_overlap_density_svo(world + normal * (j+0.5), 0.8 + j * 0.8, svo, stats);
                         //ao += cube_overlap_density_svt(world + normal * (j+0.5), 0.8 + j * 0.8, svt, svt_metadata, stats);
-                        ao += planar_overlap_density_svt(world + normal * (j*0.5+0.5), 0.8 + j * 0.8, ray.face, Fetcher(svt, svt_metadata), stats);
+                        ao += planar_overlap_density_svt(world + normal * (j*2+0.5), 0.8 + 2 * j * 0.8, ray.face, Fetcher(svt, svt_metadata), stats);
                         if (ao > 2) {
                             break;
                         }
