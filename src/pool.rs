@@ -7,7 +7,10 @@ pub unsafe fn create_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool
     let buffers = vk::DescriptorPoolSize::default()
         .descriptor_count(30)
         .ty(vk::DescriptorType::STORAGE_BUFFER);
-    let descriptor_pool_sizes = [images, buffers];
+    let combined_image_samplers = vk::DescriptorPoolSize::default()
+        .descriptor_count(1)
+        .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER);
+    let descriptor_pool_sizes = [images, buffers, combined_image_samplers];
 
     let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
         .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)

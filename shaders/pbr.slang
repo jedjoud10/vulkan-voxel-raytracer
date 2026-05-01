@@ -63,6 +63,11 @@ public struct SunData {
 	public float3 color;
 };
 
+// Sky data struct
+public struct SkyData {
+	public SamplerCube skybox;
+};
+
 // Camera data struct
 public struct CameraData {
 	public float3 view;
@@ -85,6 +90,7 @@ public float3 brdf(
 	PbrSurfaceData surface,
 	CameraData camera,
 	SunData light,
+	SkyData sky,
 ) {
     float3 half_view = normalize(camera.view + light.direction);
     float3 f0 = lerp(0.04, surface.albedo, surface.metallic);
@@ -107,8 +113,10 @@ public float3 brdf(
 	// TODO: can we use Slang auto-diff to compute the irradiance and specular IBL in a smarter way?
     //float3 irradiance = sky(light.direction, surface.normal, true);
 
-	float3 skyColor = sky(light.direction, float3(0, 0.8, 0), surface.position, false) + 0.1;
-	float3 groundColor = sky(light.direction, float3(0, 0.05, 0), surface.position, false) + 0.05f;
+	//float3 skyColor = sky(light.direction, float3(0, 0.8, 0), surface.position, false) + 0.1;
+	//float3 groundColor = sky(light.direction, float3(0, 0.05, 0), surface.position, false) + 0.05f;
+	float3 skyColor = sky.skybox.Sample(float3(0, 0.8, 0)).xyz + 0.1;
+	float3 groundColor = sky.skybox.Sample(float3(0, 0.05, 0)).xyz + 0.05f;
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
@@ -116,7 +124,7 @@ public float3 brdf(
 	
 	// make the environment specular reflect the actual sky as the roughness decreases
 	float smoothness = 1-surface.roughness;
-	environment_specular = lerp(environment_specular, sky(light.direction, -reflect(camera.view, surface.normal), true), smoothstep(0.8, 1.0, smoothness));
+	environment_specular = lerp(environment_specular, sky.skybox.Sample(-reflect(camera.view, surface.normal)).xyz, smoothstep(0.8, 1.0, smoothness));
 
 
 	//float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;

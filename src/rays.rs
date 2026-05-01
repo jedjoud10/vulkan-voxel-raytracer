@@ -3,6 +3,7 @@ use vek::*;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 
+/*
 use crate::{buffer::{self, Buffer, create_buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}, voxel::SparseVoxelOctree};
 use crate::pipeline::*;
 
@@ -51,6 +52,7 @@ pub unsafe fn create_ray_trace_buffers(
         dispatch_size_command: create_buffer(device, allocator, size_of::<Vec3::<u32>>(), binder, "ray dispatch size buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER),
     }
 }
+    */
 
 /*
 pub type RayTracePipeline = MultiComputePipeline<2>;

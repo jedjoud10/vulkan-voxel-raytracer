@@ -43,8 +43,7 @@ pub unsafe fn create_sparse_structures(
     svo.rebuild(device, pool, queue, allocator);
     log::info!("created & updated sparse voxel tree buffers");
 
-    //let chunks = convert_to_sparse_image_chunks(&svo.nodes);
-    let chunks = Vec::new();
+    let chunks = convert_to_sparse_image_chunks(&svo.nodes);
     let svt = create_sparse_voxel_texture(&device, &mut allocator, binder, queue, pool, queue_family_index, chunks);
     log::info!("created sparse voxel texture");
 
@@ -106,6 +105,8 @@ unsafe fn create_sparse_voxel_texture(
         .tiling(vk::ImageTiling::OPTIMAL)
         .array_layers(1);
     let sparse_image = device.create_image(&sparse_image_create_info, None).unwrap();
+    crate::debug::set_object_name(sparse_image, binder, "Sparse Voxel Texture");
+
     let sparse_requirements = device.get_image_sparse_memory_requirements(sparse_image);
 
     // make sure there are sparse memory requirements
@@ -160,6 +161,8 @@ unsafe fn create_sparse_voxel_texture(
         .tiling(vk::ImageTiling::OPTIMAL)
         .array_layers(1);
     let metadata_image = device.create_image(&metadata_image_create_info, None).unwrap();
+    crate::debug::set_object_name(metadata_image, binder, "Metadata Voxel Texture");
+
     let metadata_image_requirements = device.get_image_memory_requirements(metadata_image);
     
     // stores the origin of the chunk and offset in the `total_data_to_copy` buffer
@@ -209,15 +212,8 @@ unsafe fn create_sparse_voxel_texture(
                     location: gpu_allocator::MemoryLocation::GpuOnly,
                 })
                 .unwrap();
-            
-            if let Some(binder) = binder {
-                let name = format!("Sparse Voxel Texture Memory Binding Chunk {x}-{y}-{z}");
-                let cstring = CString::from_str(&name).unwrap();
-                let marker = vk::DebugUtilsObjectNameInfoEXT::default()
-                    .object_handle(allocation.memory())
-                    .object_name(cstring.as_c_str());
-                binder.set_debug_utils_object_name(&marker).unwrap();
-            }
+
+            crate::debug::set_object_name(allocation.memory(), binder, format!("Sparse Voxel Texture Memory Binding Chunk {x}-{y}-{z}"));
 
             let memory_bind = vk::SparseImageMemoryBind::default()
                 .extent(vk::Extent3D::default()
@@ -341,14 +337,7 @@ unsafe fn create_sparse_voxel_texture(
     allocator.free(sparse_staging_buffer_alloc).unwrap();
     device.destroy_buffer(sparse_staging_buffer, None);
     allocator.free(metadata_staging_buffer_alloc).unwrap();
-    device.destroy_buffer(metadata_staging_buffer, None);
-
-    if let Some(binder) = binder {
-        let marker = vk::DebugUtilsObjectNameInfoEXT::default()
-            .object_handle(sparse_image)
-            .object_name(c"Sparse Voxel Texture");
-        binder.set_debug_utils_object_name(&marker).unwrap();
-    }
+    device.destroy_buffer(metadata_staging_buffer, None);            
 
     let subresource_range = vk::ImageSubresourceRange::default()
         .aspect_mask(vk::ImageAspectFlags::COLOR)

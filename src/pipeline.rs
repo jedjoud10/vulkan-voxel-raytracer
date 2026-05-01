@@ -51,27 +51,27 @@ pub struct SpecConstant<'a> {
     pub bytes: &'a [u8],
 }
 
-pub struct MultiComputePipeline<const N: usize> {
+pub struct MultiComputePipeline<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> {
     pub module: vk::ShaderModule,
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub entry_points: [SingleEntryPointWrapper; N],
+    pub entry_points: [SingleEntryPointWrapper; ENTRY_POINTS],
+    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SETS],
 }
 
-impl<const N: usize> MultiComputePipeline<N> {
+impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeline<ENTRY_POINTS, DESCRIPTOR_SETS> {
     pub unsafe fn destroy(self, device: &ash::Device) {
-        for x in self.entry_points {
-            device.destroy_pipeline(x.pipeline, None);
-            device.destroy_pipeline_layout(x.pipeline_layout, None);
+        for single_entry_point_wrapper in self.entry_points {
+            device.destroy_pipeline(single_entry_point_wrapper.pipeline, None);
+            device.destroy_pipeline_layout(single_entry_point_wrapper.pipeline_layout, None);
         }
         
-        device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        for descriptor_set_layout in self.descriptor_set_layout {
+            device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+        }
         device.destroy_shader_module(self.module, None);
     }
 }
 
-pub type VoxelGeneratePipeline = MultiComputePipeline<2>;
-pub type VoxelTickPipeline = MultiComputePipeline<4>;
-pub type RenderPipeline = MultiComputePipeline<1>;
+pub type RenderPipeline = MultiComputePipeline<1, 2>;
 
 #[derive(Pod, Zeroable, Copy, Clone)]
 #[repr(C)]
@@ -127,25 +127,45 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let bindings = [
+    let bindings_1 = [
         output,
         svt_image,
         svt_meta_image,
         svo_bitmasks,
         svo_indices,
     ];
-
-    let render_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+    let first_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::empty())
-        .bindings(&bindings);
-
-    let render_compute_descriptor_set_layout = device
-        .create_descriptor_set_layout(&render_descriptor_set_layout_create_info, None)
+        .bindings(&bindings_1);
+    let first_descriptor_set_layout = device
+        .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
         .unwrap();
-    log::debug!("created descriptor set layout");
+    crate::debug::set_object_name(first_descriptor_set_layout, binder, "render compute descriptor set layout 1");
 
-    crate::debug::set_object_name(render_compute_descriptor_set_layout, binder, "render compute descriptor set layout");
-    let render_compute_descriptor_set_layouts = [render_compute_descriptor_set_layout];
+    let first_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings_1);
+    let first_descriptor_set_layout = device
+        .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
+        .unwrap();
+
+    let skybox = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1);
+    let bindings_2 = [
+        skybox
+    ];
+    let second_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings_2);
+    let second_descriptor_set_layout = device
+        .create_descriptor_set_layout(&second_descriptor_set_layout_create_info, None)
+        .unwrap();
+    crate::debug::set_object_name(second_descriptor_set_layout, binder, "render compute descriptor set layout 2");
+
+    let render_compute_descriptor_set_layouts = [first_descriptor_set_layout, second_descriptor_set_layout];
 
     let push_constant_size = Some(size_of::<PushConstants>());
 
@@ -153,15 +173,16 @@ pub unsafe fn create_render_compute_pipeline(
     let spec_constant_bytes = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&constants));
     let spec_constants = spec_constant_bytes.into_iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect();
 
-    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", render_compute_descriptor_set_layout, push_constant_size, Some(spec_constants));
+    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", &render_compute_descriptor_set_layouts, push_constant_size, Some(spec_constants));
     
     return MultiComputePipeline {
         module: render_compute_shader_module,
-        descriptor_set_layout: render_compute_descriptor_set_layout,
+        descriptor_set_layout: render_compute_descriptor_set_layouts,
         entry_points: [main_entry_point]
     }
 }
 
+/*
 pub unsafe fn create_tick_voxel_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
@@ -229,14 +250,15 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
     let compute_descriptor_test_set_layout = device
         .create_descriptor_set_layout(&descriptor_set_test_layout_create_info, None)
         .unwrap();
-
     crate::debug::set_object_name(compute_descriptor_test_set_layout, binder, "tick voxel compute descriptor set layout");
+    let descriptor_set_layouts = [compute_descriptor_test_set_layout];
+
 
     let push_constant_size = Some(size_of::<PushConstants2>());
-    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unwrap", compute_descriptor_test_set_layout, push_constant_size, None);
-    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unpack", compute_descriptor_test_set_layout, push_constant_size, None);
-    let tick_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", compute_descriptor_test_set_layout, push_constant_size, None);
-    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "copyDispatchSize", compute_descriptor_test_set_layout, push_constant_size, None);
+    let unwrap_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unwrap", &descriptor_set_layouts, push_constant_size, None);
+    let unpack_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "unpack", &descriptor_set_layouts, push_constant_size, None);
+    let tick_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "main", &descriptor_set_layouts, push_constant_size, None);
+    let copy_dispatch_params_entry_point = create_single_entry_point_pipeline(device, &binder, compute_shader_module, "copyDispatchSize", &descriptor_set_layouts, push_constant_size, None);
     
     return MultiComputePipeline {
         module: compute_shader_module,
@@ -244,13 +266,14 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
         entry_points: [unwrap_entry_point, unpack_entry_point, tick_entry_point, copy_dispatch_params_entry_point]
     }
 }
+*/
 
 pub unsafe fn create_single_entry_point_pipeline(
     device: &ash::Device,
     binder: &Option<ash::ext::debug_utils::Device>,
     compute_shader_module: vk::ShaderModule,
     entry_point_name: &str,
-    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
     push_constant_size: Option<usize>,
     spec_constants: Option<Vec<SpecConstant>>
 ) -> SingleEntryPointWrapper {
@@ -283,9 +306,7 @@ pub unsafe fn create_single_entry_point_pipeline(
         .stage(vk::ShaderStageFlags::COMPUTE)
         .specialization_info(&specialization_info)
         .module(compute_shader_module);
-    
-    let descriptor_set_layouts: [vk::DescriptorSetLayout; 1] = [descriptor_set_layout];
-    
+        
     let mut push_constant_ranges = SmallVec::<[vk::PushConstantRange;1]>::new();
     if let Some(push_constant_size) = push_constant_size {
         let push_constant_range = vk::PushConstantRange::default()
@@ -322,7 +343,7 @@ pub unsafe fn create_single_entry_point_pipeline(
 
     return SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
 }
-
+/*
 pub unsafe fn create_generate_voxel_compute_pipeline(
     raw: &[u32],
     device: &ash::Device,
@@ -435,3 +456,4 @@ pub unsafe fn create_generate_voxel_compute_pipeline(
     }
     */
 }
+*/

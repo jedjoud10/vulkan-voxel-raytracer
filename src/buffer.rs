@@ -196,7 +196,26 @@ pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Alloca
     (staging_buffer, allocation)
 }
 
+pub unsafe fn create_staging_buffer2<'a, 'b>(device: &'a ash::Device, allocator: &'a mut Allocator, bytes: &'b [u8]) -> TemporaryStagingBuffer<'a> {
+    let (buffer, allocation) = create_staging_buffer(device, allocator, bytes);
+    return TemporaryStagingBuffer { buffer, allocation: Some(allocation), device, allocator }
+}
 
+pub struct TemporaryStagingBuffer<'a> {
+    pub buffer: vk::Buffer,
+    pub allocation: Option<Allocation>,
+    pub device: &'a ash::Device,
+    pub allocator: &'a mut Allocator,
+}
+
+impl<'a> Drop for TemporaryStagingBuffer<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_buffer(self.buffer, None);
+            self.allocator.free(self.allocation.take().unwrap()).unwrap();
+        }
+    }
+}
 
 pub unsafe fn create_counter_buffer(
     device: &ash::Device,

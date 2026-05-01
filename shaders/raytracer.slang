@@ -19,6 +19,9 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 [[vk::binding(4, 0)]]
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
+[[vk::binding(0, 1)]]
+SamplerCube<float4> skybox;
+
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
 [SpecializationConstant] const uint MAX_ITERATIONS = 2;
 [SpecializationConstant] const bool ROUND_NORMALS = false;
@@ -60,7 +63,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     SparseVoxelOctree svo = SparseVoxelOctree(svo_indices_buffer, svo_bitmasks_buffer);
     Statistics stats = Statistics(0, 0);
     
-    
     float3 iterative_ray_dir = ray_dir;
     float3 iterative_ray_pos = ray_pos;
 
@@ -91,7 +93,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             if (ROUND_NORMALS) {
                 normal = normalize(world - ray.block_pos - 0.5);
             }
-
 
             float3 diffuse = 1.0;
 
@@ -261,8 +262,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 // approximate sun color based on height
                 float3 sun_colour = sun_colour(sun.xyz);
                 SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (1.2 * sun_colour) : 0);
+                SkyData sky_data = SkyData(skybox);
 
-                temp_color = brdf(pbr_surface_data, camera_data, sun_data);
+                temp_color = brdf(pbr_surface_data, camera_data, sun_data, sky_data);
                 color *= temp_color;
 
                 /*
@@ -284,7 +286,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 break;
             }
         } else {
-            color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
+            color *= skybox.Sample(iterative_ray_dir).xyz;
+            //color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
             break;
         }
 

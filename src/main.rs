@@ -19,6 +19,7 @@ mod buffer;
 mod rays;
 mod statistics;
 mod utils;
+mod skybox;
 
 use ash;
 use ash::vk;
@@ -39,6 +40,7 @@ use winit::window::{Window, WindowId};
 use statistics::Statistics;
 
 use crate::pipeline::*;
+use crate::skybox::Skybox;
 use crate::voxel::*;
 
 
@@ -134,6 +136,8 @@ struct InternalApp {
     
     svo: SparseVoxelOctree,
     svt: SparseVoxelTexture,
+
+    skybox: Skybox,
 
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
@@ -308,6 +312,16 @@ impl InternalApp {
         );
         log::info!("created sparse voxel structures");
 
+        let skybox = skybox::create_skybox(
+            &device,
+            &mut allocator,
+            &debug_marker,
+            queue,
+            pool,
+            queue_family_index
+        );
+        log::info!("created skybox");
+
         log::info!("creating frames in flight structures...");
         let mut frames_in_flight = Vec::<PerFrameData>::new();
         for ((rt_image, rt_image_allocation), swapchain_image) in rt_images.into_iter().zip(images.into_iter()) {
@@ -357,10 +371,10 @@ impl InternalApp {
                 .allocate_command_buffers(&cmd_buffer_create_info)
                 .unwrap()[0];            
 
-            let layouts = [render_compute_pipeline.descriptor_set_layout];
+            let layouts = &render_compute_pipeline.descriptor_set_layout;
             let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(descriptor_pool)
-                .set_layouts(&layouts);
+                .set_layouts(layouts);
             let all_descriptor_sets_for_frame = device
                 .allocate_descriptor_sets(&descriptor_set_allocate_info)
                 .unwrap();
@@ -409,6 +423,7 @@ impl InternalApp {
             allocator,
             svo,
             svt,
+            skybox,
             frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
@@ -543,7 +558,6 @@ impl InternalApp {
         let end_fence = *end_fence;
         let src_image_view = *src_image_view;
         let all_descriptor_sets_for_frame = all_descriptor_sets_for_frame;
-        let render_descriptor_set = all_descriptor_sets_for_frame[0];
 
         if let Err(err) = self.device.wait_for_fences(&[end_fence], true, u64::MAX) {
             log::error!("wait on fence err: {:?}", err);
@@ -631,31 +645,42 @@ impl InternalApp {
             .buffer(self.svo.index_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
+        let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
+            .image_view(self.skybox.image_view)
+            .sampler(self.skybox.sampler)
+            .image_layout(vk::ImageLayout::GENERAL);
 
         let descriptor_image_infos = [descriptor_rt_image_info, descriptor_svt_image_info, descriptor_svt_metadata_image_info];
         let descriptor_svo_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
+        let descriptor_image_infos_2 = [descriptor_skybox_image_info];
 
         let image_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_image_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
-            .dst_set(render_descriptor_set)
+            .dst_set(all_descriptor_sets_for_frame[0])
             .image_info(&descriptor_image_infos);
         let buffer_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(3)
-            .dst_set(render_descriptor_set)
+            .dst_set(all_descriptor_sets_for_frame[0])
             .buffer_info(&descriptor_svo_infos);
+        let image_descriptor_write_2 = vk::WriteDescriptorSet::default()
+            .descriptor_count(descriptor_svo_infos.len() as u32)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .dst_binding(0)
+            .dst_set(all_descriptor_sets_for_frame[1])
+            .image_info(&descriptor_image_infos_2);
         
 
-        self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write], &[]);
+        self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write, image_descriptor_write_2], &[]);
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
             self.render_compute_pipeline.entry_points[0].pipeline_layout,
             0,
-            &[render_descriptor_set],
+            &all_descriptor_sets_for_frame[0..2],
             &[],
         );
         self.device.cmd_bind_pipeline(
@@ -826,6 +851,9 @@ impl InternalApp {
 
         self.svt.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVT");
+
+        self.skybox.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed skybox");
 
         self.device.destroy_query_pool(self.query_pool, None);
         log::info!("destroyed query pool");

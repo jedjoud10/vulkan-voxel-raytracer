@@ -22,6 +22,8 @@ pub unsafe fn create_device_and_queue(
         .queue_family_index(queue_family_index);
     let queue_create_infos = [queue_create_info];
 
+    let mut compute_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
+        .compute_derivative_group_quads(true); 
     let mut shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
         .shader_device_clock(true)
         .shader_subgroup_clock(true); 
@@ -60,7 +62,8 @@ pub unsafe fn create_device_and_queue(
         .push_next(&mut device_features_13)
         .push_next(&mut device_features_12)
         .push_next(&mut atomics)
-        .push_next(&mut shader_clock);
+        .push_next(&mut shader_clock)
+        .push_next(&mut compute_derivatives);
 
     let device = instance
         .create_device(physical_device, &device_create_info, None)
