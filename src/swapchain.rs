@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 
 use ash::vk;
 
-pub const FRAMES_IN_FLIGHT: u32 = 3;
+pub const FRAMES_IN_FLIGHT: u32 = 2;
 
 pub unsafe fn create_swapchain(
     instance: &ash::Instance,
@@ -119,7 +119,7 @@ pub unsafe fn create_temporary_target_render_image(
             name: "Render Texture Image Allocation",
             requirements: requirements,
             linear: false,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedImage(rt_image),
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,
         })
         .unwrap();

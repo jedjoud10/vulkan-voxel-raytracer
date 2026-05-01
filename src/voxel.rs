@@ -25,7 +25,7 @@ pub unsafe fn create_sparse_structures(
     // another buffer stores the "children base" index references as u16s
     // it contains a bitmask of its children
     log::debug!("creating SVO...");
-    let max_svo_element_size = 4096 * 64 * 64;
+    let max_svo_element_size = 4096 * 64 * 4;
     let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, nodes: convert_recursive_to_flat_map(create_recursive_structure()) };
@@ -43,7 +43,8 @@ pub unsafe fn create_sparse_structures(
     svo.rebuild(device, pool, queue, allocator);
     log::info!("created & updated sparse voxel tree buffers");
 
-    let chunks = convert_to_sparse_image_chunks(&svo.nodes);
+    //let chunks = convert_to_sparse_image_chunks(&svo.nodes);
+    let chunks = Vec::new();
     let svt = create_sparse_voxel_texture(&device, &mut allocator, binder, queue, pool, queue_family_index, chunks);
     log::info!("created sparse voxel texture");
 
@@ -82,7 +83,7 @@ unsafe fn create_sparse_voxel_texture(
     queue: vk::Queue,
     pool: vk::CommandPool,
     queue_family_index: u32,
-    mut chunks: Vec<SparseImageChunk>,
+    chunks: Vec<SparseImageChunk>,
 ) -> SparseVoxelTexture {
     let queue_family_indices = [queue_family_index];
 
@@ -245,7 +246,7 @@ unsafe fn create_sparse_voxel_texture(
             name: &format!("Metadata Image Allocation"),
             requirements: metadata_image_requirements,
             linear: false,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedImage(metadata_image),
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,
         })
         .unwrap();

@@ -21,6 +21,30 @@ static const uint32_t FULL_NODE = 0xFFFFFFFF-1;
 static const int TOTAL_SIZE = 1 << (DEPTH * 2);
 
 
+// https://tavianator.com/2022/ray_box_boundary.html
+bool ray_box_intersection(
+    float3 inv_dir,
+    int8_t3 dir_sign,
+    float3 ray_pos,
+    int16_t3 aabb_min,
+    int16_t3 aabb_max,
+    out float _tmin,
+) {
+    float3 t1 = (aabb_min - ray_pos) * inv_dir * dir_sign;
+    float3 t2 = (aabb_max - ray_pos) * inv_dir * dir_sign;
+
+    float3 k1 = min(t1, t2);
+    float3 k2 = max(t1, t2);
+
+    float tmin = max3(k1.x, k1.y, k1.z);
+    float tmax = min3(k2.x, k2.y, k2.z);
+
+
+    _tmin = tmin;
+
+    return max(tmin, 0) <= tmax;
+}
+
 struct DdaTraversalOutput {
     bool hit;
     float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
@@ -67,14 +91,11 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     
     for (uint8_t i = 0; i < 12; i++) {
         stats.iterations += 1;
-        // exit early if we leave the space
-        if (any(floored_pos < 0 | floored_pos > 3)) {
-            return DdaTraversalOutput(false);
-        }
-
+        /*
         if ((i*voxel_size) > MAX_DISTANCE) {
             return DdaTraversalOutput(false); 
         }
+        */
 
         // we know that floored pos is the local coordinate directly anyways
         uint8_t3 local = (uint8_t3)floored_pos;
@@ -87,22 +108,10 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
         stats.active_threads_per_call += WaveActiveCountBits(base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1));
         
         [branch]
-        if (base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1)) {  
+        if ((((raw >> bit_index) & 1) == 1)) {  
             // still need an offset though, for the normals :(((
             float distance_offset = length(select(eqs, (side_dist - inv_dir) * voxel_size, 0));
             float distance_to_surface = distance + distance_offset;
-
-            [branch]
-            if (base_index == FULL_NODE) {
-                if (K > 0) {
-                    stats.exit_type = 2;
-                    return dda_trace_recurse<K - 1, END, MAX_DISTANCE>(FULL_NODE, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
-                } else {
-                    float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
-                    stats.exit_type = 2;
-                    return DdaTraversalOutput(true, world, origin, face);
-                }
-            }
 
             // check if we have reached the bottom most node and exit if so
             [branch]
@@ -122,9 +131,16 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
 
                 // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
                 if (new_base_index == FULL_NODE || K <= END) {
-                    stats.exit_type = 2;
-                    // TODO: maybe try inlining the entire function and remove redundent calculations?
-                    return dda_trace_recurse<K - 1, END, MAX_DISTANCE>(FULL_NODE, uint64_t.maxValue, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
+                    float tmin = 0;
+                    ray_box_intersection(inv_dir, dir_sign, ray_pos, origin, origin+voxel_size, tmin);
+
+                    uint3 block_pos = floor(ray_pos+tmin*ray_dir);
+
+                    // apply "accurate" block pos since we know the bounds of the full node and input face
+                    int3 tmp_sign = max(0, -dir_sign);
+                    block_pos[face] = origin[face] + tmp_sign[face] * voxel_size;
+
+                    return DdaTraversalOutput(true, ray_pos+tmin*ray_dir, block_pos, face);
                 }
 
                 // TODO:
@@ -162,6 +178,11 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
         face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
         side_dist += select(eqs, inv_dir, 0.0);
         floored_pos += select(eqs, (int16_t3)dir_sign, int16_t3(0));
+
+        // exit early if we leave the space
+        if (any(floored_pos < 0 | floored_pos > 3)) {
+            return DdaTraversalOutput(false);
+        }
     }
 
     return DdaTraversalOutput(false);

@@ -1,12 +1,10 @@
-use std::{cell::RefCell, collections::VecDeque, ffi::{CStr, CString}, num::NonZeroU32, ops::ControlFlow, rc::{Rc, Weak}, str::FromStr, time::Instant};
+use std::{collections::VecDeque, ops::ControlFlow, time::Instant};
 use crate::utils::*;
 use ash::vk;
-use bit_set::BitSet;
 use bit_vec::BitVec;
-use gpu_allocator::vulkan::{Allocation, Allocator};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use smallvec::SmallVec;
-use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
+use gpu_allocator::vulkan::Allocator;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use crate::buffer::{self, Buffer};
 
 use super::{SVO_DEPTH, TOTAL_SIZE, BOTTOM_NODE, FULL_NODE};
 
@@ -197,7 +195,7 @@ impl SparseVoxelOctree {
         self.traverse(pos, 0, prefire_callback, postfire_callback);
 
         // BOTTOM UP
-        for (depth, node) in path.iter().enumerate().rev() {
+        for (_, node) in path.iter().enumerate().rev() {
             if voxel {
                 // recalculate node fullness based on children fullness
                 if let Some(children) = self.nodes[node.child_index_absolute].children.as_ref() {
@@ -323,9 +321,9 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
 
     const CALCULATE_SAH: bool = false;
 
-    log::debug!("base indices for depths:");
-    for (i, base_index) in base_indices_for_height.iter().enumerate() {
-        log::debug!(" - depth {i}: {base_index}");
+    log::debug!("base indices for height:");
+    for (height, base_index) in base_indices_for_height.iter().enumerate().rev() {
+        log::debug!(" - height {height}: {base_index}");
     }
 
     let sah_total = if CALCULATE_SAH {
@@ -340,19 +338,11 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
 
 
     log::debug!("calculating total fullness...");
-    let fullness_total = bitmask_vec.par_iter().map(|bitmask| {
-        bitmask.count_ones() as f32
-    }).sum::<f32>();
 
-
-    let fullness_normalized_total_nodes = (fullness_total / nodes_visited as f32) * 100f32;
     let sah_normalized_total_nodes = (sah_total as f32 / nodes_visited as f32) * 100f32;
 
     log::debug!("converted svo, nodes visited: {nodes_visited}, length: {}", bitmask_vec.len());
     log::debug!("metrics:");
-    log::debug!(" - fullness total: {fullness_total}");
-    log::debug!(" - fullness normalized: {fullness_normalized_total_nodes:.2}%");
-
     if CALCULATE_SAH {
         log::debug!(" - sah total: {sah_total}");
         log::debug!(" - sah normalized: {sah_normalized_total_nodes:.2}%");
@@ -360,6 +350,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
     
     let end = Instant::now();
     log::debug!(" - time taken: {}ms", (end-start).as_millis());
+
     (bitmask_vec, index_vec)
 }
 

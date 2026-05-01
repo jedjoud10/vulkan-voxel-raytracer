@@ -70,6 +70,7 @@ public struct CameraData {
 
 // Surface data struct 
 public struct PbrSurfaceData {
+	public float3 position;
 	public float3 albedo;
 	public float3 normal;
 	public float roughness;
@@ -106,8 +107,8 @@ public float3 brdf(
 	// TODO: can we use Slang auto-diff to compute the irradiance and specular IBL in a smarter way?
     //float3 irradiance = sky(light.direction, surface.normal, true);
 
-	float3 skyColor = sky(light.direction, float3(0, 0.8, 0), false) + 0.1;
-	float3 groundColor = sky(light.direction, float3(0, 0.05, 0), false) + 0.05f;
+	float3 skyColor = sky(light.direction, float3(0, 0.8, 0), surface.position, false) + 0.1;
+	float3 groundColor = sky(light.direction, float3(0, 0.05, 0), surface.position, false) + 0.05f;
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;

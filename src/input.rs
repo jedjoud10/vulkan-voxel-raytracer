@@ -238,18 +238,13 @@ pub fn window_event(input: &mut Input, ev: &WindowEvent) {
     match ev {
         // Handles keyboard keys
         WindowEvent::KeyboardInput {
-            device_id,
             event:
                 KeyEvent {
                     physical_key: PhysicalKey::Code(code),
-                    logical_key,
-                    text,
-                    location,
                     state,
-                    repeat,
                     ..
                 },
-            is_synthetic,
+            ..
         } => {
             handle_button_input(input, Button::Keyboard(*code), *state);
         }
@@ -308,7 +303,7 @@ pub fn device_event(input: &mut Input, ev: &DeviceEvent) {
 // This will also read the state from gamepads using gilrs
 pub fn update(input: &mut Input) {
     // Update the state of the keys/buttons
-    for (a, state) in input.keys.iter_mut() {
+    for (_, state) in input.keys.iter_mut() {
         *state = match state {
             ButtonState::Pressed => ButtonState::Held,
             ButtonState::Released => ButtonState::None,

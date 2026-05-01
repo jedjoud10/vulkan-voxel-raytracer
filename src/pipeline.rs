@@ -2,6 +2,7 @@ use std::{ffi::{CStr, CString}, ops::Mul, str::FromStr};
 
 use ash::vk;
 use bytemuck::{Pod, Zeroable};
+use smallvec::SmallVec;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -285,34 +286,24 @@ pub unsafe fn create_single_entry_point_pipeline(
     
     let descriptor_set_layouts: [vk::DescriptorSetLayout; 1] = [descriptor_set_layout];
     
-    let compute_pipeline_layout = if let Some(push_constant_size) = push_constant_size {
+    let mut push_constant_ranges = SmallVec::<[vk::PushConstantRange;1]>::new();
+    if let Some(push_constant_size) = push_constant_size {
         let push_constant_range = vk::PushConstantRange::default()
             .offset(0)
             .size(push_constant_size as u32)
             .stage_flags(vk::ShaderStageFlags::COMPUTE);
-        let push_constant_ranges = [push_constant_range];
-        
-        let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
-            .push_constant_ranges(&push_constant_ranges)
-            .flags(vk::PipelineLayoutCreateFlags::empty())
-            .set_layouts(&descriptor_set_layouts);
-        
-        let compute_pipeline_layout = device
-            .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
-            .unwrap();
-        compute_pipeline_layout
-    } else {
-        let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
-            .push_constant_ranges(&[])
-            .flags(vk::PipelineLayoutCreateFlags::empty())
-            .set_layouts(&descriptor_set_layouts);
-        
-        let compute_pipeline_layout = device
-            .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
-            .unwrap();
-        compute_pipeline_layout
+        push_constant_ranges.push(push_constant_range);
     };
+
+    let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(&push_constant_ranges.as_slice())
+        .flags(vk::PipelineLayoutCreateFlags::empty())
+        .set_layouts(&descriptor_set_layouts);
     
+    let compute_pipeline_layout = device
+        .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
+        .unwrap();
+
     crate::debug::set_object_name(compute_pipeline_layout, binder, format!("entry point '{entry_point_name}' compute pipeline layout"));
     
     let compute_pipeline_create_info = vk::ComputePipelineCreateInfo::default()

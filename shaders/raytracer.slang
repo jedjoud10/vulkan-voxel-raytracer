@@ -116,6 +116,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             }
 
             if (special > 0.8 && metallic > 0.0) {
+                /*
                 iterative_ray_pos = world + iterative_ray_dir * 0.001;
                 
                 const int ITERNUM = 256;
@@ -125,25 +126,26 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 float3 ray_velocity = iterative_ray_dir; 
 
                 [loop]
-                al: for (int k = 0; k < ITERNUM; k++) {
+                raymarch: for (int k = 0; k < ITERNUM; k++) {
                     stats.iterations += 1;
                     
                     float3 force_torwards_center = -(iterative_ray_pos - center);
                     float3 normalized_force_torwards_center = force_torwards_center / (pow(length(force_torwards_center) + 0.8, 8));
-                    normalized_force_torwards_center *= (sin(time * 0.8) * 1.0);
+                    normalized_force_torwards_center *= (sin(time * 0.8) * 2.0);
 
-                    iterative_ray_dir += normalized_force_torwards_center * dt * 0.3;
+                    iterative_ray_dir += normalized_force_torwards_center * dt * 4.3;
                     iterative_ray_pos += normalize(iterative_ray_dir) * dt;
+                    color *= lerp(snoise(iterative_ray_pos * 4.8) * 0.5 + 0.5, hash33(floor(iterative_ray_pos * 32) * 4.2132) + 0.5, 0.98);
 
                     if (any(floor(iterative_ray_pos) != block_pos)) {
-                        break al;
+                        break raymarch;
                     }
                 }
 
                 iterative_ray_dir = normalize(iterative_ray_dir);
+                */
                 
-                /*
-                // pure mirror
+                // mirror
                 // TODO: I wanted to get refractions working, but that requires more coordination between the ray-tracer and the lighting system
                 // the ray-tracer needs to keep track of the current "medium" in which the ray is traveling in, and discard that medium when a block of that medium comes up
                 // for example, if the ray entered some glass voxels, the raytracer must discard glass blocks in the next iteration as to avoid colliding with them.
@@ -158,17 +160,14 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 iterative_ray_dir = dir;
                 iterative_ray_pos = world + dir * 0.001;
                 color *= diffuse * metallic;
-                */
             } else {
                 // AMBIENT OCCLUSION
                 float ao = 1.0;
                 if (AMBIENT_OCCLUSION) {
-                    ao = 0;
+                    //ao = 0;
 
-                    /*
                     ao_solver solver = ao_solver(Fetcher(svt, svt_metadata), block_pos, world-block_pos, ray.face, sign(iterative_ray_dir));
                     ao = lerp(solver.ao(), 1, 0.8);
-                    */
                     /*
                     [loop]
                     for (int j = 0; j < 2; j++) {
@@ -223,15 +222,15 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     [loop]
                     for (int k = 0; k < SHADOW_SAMPLES; k++) {
                         float3 rng = (hash33((shadow_ray_start) * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                        float3 dir = normalize(sun.xyz + rng * 0.025);
+                        float3 dir = normalize(sun.xyz + rng * 0.005);
                         float d = 0;
                         float strength = pow(dot(dir, sun.xyz), 40);
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                        shadow += (t ? 0.0 : strength) / SHADOW_SAMPLES;
+                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, world).opacity))) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-                    shadow = (t ? 0.0 : 1);
+                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, world).opacity));
                 } else {
                     shadow = 1.0;
                 }
@@ -256,7 +255,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
                 */
 
-                PbrSurfaceData pbr_surface_data = PbrSurfaceData(diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow, sky_visibility);
+                PbrSurfaceData pbr_surface_data = PbrSurfaceData(world, diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow, sky_visibility);
                 CameraData camera_data = CameraData(-iterative_ray_dir);
 
                 // approximate sun color based on height
@@ -285,7 +284,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 break;
             }
         } else {
-            color *= sky(sun.xyz, iterative_ray_dir);
+            color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
             break;
         }
 
@@ -295,16 +294,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
         }
     }
     
-
-    /*
-    Combined,
-    Iterations,
-    BufferFetches,
-    Normals,
-    World,
-    ExitType,
-    */
-
     switch (debug_type) {
         case DebugType::Combined:
             output[id.xy] = float4(aces(color), 0);

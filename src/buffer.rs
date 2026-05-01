@@ -41,7 +41,7 @@ pub unsafe fn create_buffer(
             name: &format!("{name} allocation"),
             requirements: requirements,
             linear: true,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(buffer),
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,
         })
         .unwrap();
@@ -182,13 +182,12 @@ pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Alloca
             name: "Staging Buffer",
             requirements: requirements,
             linear: true,
-            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(staging_buffer),
+            allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::CpuToGpu,
         })
         .unwrap();
 
-    let device_memory = allocation.memory();
-    device.bind_buffer_memory(staging_buffer, device_memory, allocation.offset()).unwrap();
+    device.bind_buffer_memory(staging_buffer, allocation.memory(), allocation.offset()).unwrap();
         
     let dst_slice = allocation.mapped_slice_mut().unwrap();
 

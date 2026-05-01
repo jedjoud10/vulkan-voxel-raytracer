@@ -1,22 +1,16 @@
-use std::{cell::RefCell, collections::VecDeque, ffi::{CStr, CString}, num::NonZeroU32, rc::{Rc, Weak}, str::FromStr, time::Instant};
 use crate::utils::*;
-use ash::vk;
-use gpu_allocator::vulkan::{Allocation, Allocator};
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
-use crate::{buffer::{self, Buffer}, pipeline::{ComputePipeline, PushConstants2, VoxelGeneratePipeline, VoxelTickPipeline}};
 use super::SVO_DEPTH;
 
 pub struct RecursiveNode {
     pub children: Option<Box<[Option<Box<RecursiveNode>>; 64]>>,
-    pub bottom: bool, // set to true when height=0 or height=1
     pub full: bool, // set to true when all underlying nodes are full. This avoids having to store them in memory. If this is set then we will discard the result of `children` for any computations if the ray hits this node
 }
 
 fn full_node() -> RecursiveNode {
     RecursiveNode {
         children: None,
-        bottom: false,
         full: true,
     }
 }
@@ -25,7 +19,6 @@ fn menger_like(base: u32, seed: u32) -> RecursiveNode {
     if base == 0 {
         return RecursiveNode {
             children: None,
-            bottom: true,
             full: false,
         };
     }
@@ -69,7 +62,6 @@ fn menger_like(base: u32, seed: u32) -> RecursiveNode {
     
     RecursiveNode {
         children: Some(Box::new(children)),
-        bottom: base == 1,
         full: false, 
     }
 }
@@ -78,7 +70,6 @@ fn plains(base: u32, seed: u32) -> RecursiveNode {
     if base == 0 {
         return RecursiveNode {
             children: None,
-            bottom: true,
             full: false,
         };
     }
@@ -116,7 +107,6 @@ fn plains(base: u32, seed: u32) -> RecursiveNode {
     
     RecursiveNode {
         children: Some(Box::new(children)),
-        bottom: base == 1,
         full: full, 
     }
 }
@@ -125,7 +115,6 @@ fn spike(base: u32, cx: usize, cz: usize, seed: u32) -> RecursiveNode {
     if base == 0 {
         return RecursiveNode {
             children: None,
-            bottom: true,
             full: false,
         };
     }
@@ -175,7 +164,6 @@ fn spike(base: u32, cx: usize, cz: usize, seed: u32) -> RecursiveNode {
     
     RecursiveNode {
         children: Some(Box::new(children)),
-        bottom: base == 1,
         full: full, 
     }
 }
@@ -184,7 +172,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
     if base == 0 {
         return RecursiveNode {
             children: None,
-            bottom: true,
             full: false,
         };
     }
@@ -196,7 +183,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
     if (pseudo_random(0xA23 ^ base ^ seed) % 10) < 2 {
         return RecursiveNode {
             children: None,
-            bottom: false,
             full: false,
         }
     }
@@ -232,7 +218,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
                         // inductive case
                         if pseudo_random(0x44AB ^ base ^ seed) % 5 < 2 {
                             //children[i] = Some(Box::new(spike(base, x, z, seed)));
-                            children[i] = Some(Box::new(menger_like(base, seed)));
+                            //children[i] = Some(Box::new(menger_like(base, seed)));
                         } else {
                             recursive.push(i as u8);
                         }
@@ -255,7 +241,6 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
     
     RecursiveNode {
         children: Some(Box::new(children)),
-        bottom: base == 1,
         full: full, 
     }
 }

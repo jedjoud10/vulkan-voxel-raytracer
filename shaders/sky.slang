@@ -2,6 +2,7 @@
 #define SKY
 
 #include <hash.slang>
+#include <noises.slang>
 
 // author: SkyTheDragon
 // (sky the goat)
@@ -182,9 +183,58 @@ float stars(float3 rd) {
     return stars * rd.y;
 }
 
+// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
+Optional<float2> ray_plane_intersect(float3 ray_dir, float3 ray_pos, float plane_height) {
+    float denom = -ray_dir.y;
+    if (abs(denom) > 0.0001f) // your favorite epsilon
+    {
+        float t = -(plane_height - ray_pos.y) / denom;
+        float3 pos = t * ray_dir + ray_pos;
+
+        if (t >= 0) {
+            return Optional<float2>(pos.xz);
+        } else {
+            return none;
+        }
+    }
+    return none;
+}
+
+struct CloudsResult {
+    float opacity;
+    float3 colour;
+}
+
+// umm.. what the sigma
+CloudsResult clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos) {
+    return CloudsResult(0, 1);
+    /*
+    float opacity = 0.0;
+
+    if (let pos = ray_plane_intersect(ray_dir, ray_pos, 800)) {
+        //    opacity *= (snoise(pos * 0.01) * 0.5 + 0.5) * 2;
+        float amplitude = 0.5;
+        float scale = 2;
+        float value = 0;
+
+        for (int i = 0; i < 4; i++) {
+            value += snoise(pos * pow(scale, i) * 0.01) * pow(amplitude, i);
+        }
+
+        value *= smoothstep(0, 1, snoise(pos * 0.0005) * 1.5 - 0.2);
+
+        opacity = value / max(distance(ray_pos.xz, pos)/3000-1, 1);
+    }
+
+    opacity = clamp(opacity, 0, 1);
+
+    return CloudsResult(opacity, 1);
+    */
+}
+
 
 // the sky colour is a mix of SkyTheDragon's realtistic sky and thenuclearwolf's starnight implementation
-float3 sky(float3 sun_dir, float3 ray_dir, bool extraLightEnabled = true) {
+float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnabled = true, bool clouds_enabled = false) {
     float sunHeight = sun_dir.y;
     float dayTime = smoothstep(-0.1, 0.1, sunHeight);
     float duskDawn = smoothstep(-0.3, 0.3, sunHeight) * (1.0 - dayTime);
@@ -207,7 +257,13 @@ float3 sky(float3 sun_dir, float3 ray_dir, bool extraLightEnabled = true) {
         res += starsIntensity * night;
     }
 
-    return res;
+    CloudsResult clouds_res = CloudsResult(0, 0);
+
+    if (clouds_enabled) {
+        clouds_res = clouds(sun_dir, ray_dir, ray_pos);
+    }
+
+    return lerp(res, clouds_res.colour, clouds_res.opacity);
 }
 
 

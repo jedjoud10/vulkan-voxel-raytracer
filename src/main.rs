@@ -27,7 +27,6 @@ use gpu_allocator::vulkan::Allocation;
 use input::Button;
 use input::Input;
 use movement::Movement;
-use pipeline::PushConstants2;
 use winit::event::MouseButton;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -208,7 +207,6 @@ impl InternalApp {
             &surface_loader,
             surface_khr,
         );
-        let queue_family_indices = [queue_family_index];
         log::info!("created device and fetched main queue");
 
         let debug_marker = debug_messenger.is_some().then(|| {
@@ -535,7 +533,6 @@ impl InternalApp {
             cmd,
             all_descriptor_sets_for_frame,
             src_image_view,
-            dst_image_view,
             ..
         } = &self.frames_in_flight[frame_index as usize];
 
@@ -545,13 +542,18 @@ impl InternalApp {
         let present_complete_semaphores = [*present_complete_semaphore];
         let end_fence = *end_fence;
         let src_image_view = *src_image_view;
-        let dst_image_view = *dst_image_view;
         let all_descriptor_sets_for_frame = all_descriptor_sets_for_frame;
         let render_descriptor_set = all_descriptor_sets_for_frame[0];
 
-        
         if let Err(err) = self.device.wait_for_fences(&[end_fence], true, u64::MAX) {
             log::error!("wait on fence err: {:?}", err);
+        }
+
+        let mut timestamps = [0u64; 2];
+        let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64).is_ok();
+        if okay {
+            let delta_in_ms = ((timestamps[1].saturating_sub(timestamps[0])) as f64 * self.timestamp_period as f64) / 1000000.0f64;
+            self.stats.push_query_timings(delta_in_ms);
         }
 
         self.device.reset_fences(&[end_fence]).unwrap();
@@ -765,7 +767,7 @@ impl InternalApp {
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
             .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
+            .dst_access_mask(vk::AccessFlags2::NONE)
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .dst_stage_mask(vk::PipelineStageFlags2::NONE)
             .src_queue_family_index(self.queue_family_index)
@@ -804,16 +806,8 @@ impl InternalApp {
 
         // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
         // remove this when shit is fixed pls thx
-        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
-
-
-        let mut timestamps = [0u64; 2];
-        let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT).is_ok();
-        if okay {
-            let delta_in_ms = ((timestamps[1].saturating_sub(timestamps[0])) as f64 * self.timestamp_period as f64) / 1000000.0f64;
-            self.stats.push_query_timings(delta_in_ms);
-        }
-        
+        //self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
+       
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
     }
