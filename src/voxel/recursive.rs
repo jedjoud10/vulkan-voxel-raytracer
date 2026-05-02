@@ -218,7 +218,7 @@ fn test_sparse_voxel_octree_recurse(base: u32, seed: u32) -> RecursiveNode {
                         // inductive case
                         if pseudo_random(0x44AB ^ base ^ seed) % 5 < 2 {
                             //children[i] = Some(Box::new(spike(base, x, z, seed)));
-                            //children[i] = Some(Box::new(menger_like(base, seed)));
+                            children[i] = Some(Box::new(menger_like(base, seed)));
                         } else {
                             recursive.push(i as u8);
                         }

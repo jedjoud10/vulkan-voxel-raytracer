@@ -12,7 +12,7 @@ void main(uint3 id: SV_DispatchThreadID, uniform float4 sun) {
     float2 uv = ((id.xy / (float)RESOLUTION) * 2.0 - 1.0);
     
     float3 coords = 0;
-    
+
     // -X
     if (id.z == 0) {
         coords = float3(-1, -uv.y, uv.x); 
@@ -46,6 +46,6 @@ void main(uint3 id: SV_DispatchThreadID, uniform float4 sun) {
     float3 ray_dir = normalize(coords);
     ray_dir.xz = -ray_dir.xz;
     
-    float3 col = sky(sun.xyz, ray_dir, 0, true, true);
+    float3 col = sky(sun.xyz, ray_dir, 0, false, true);
     skybox.Store(id, float4(col, 0));
 }

@@ -125,12 +125,6 @@ pub unsafe fn create_skybox(
         .image_subresource(image_subresource_layers)
     ]);
 
-    /*
-    let clear_color_value = vk::ClearColorValue {
-        float32: [0.5f32; 4]
-    };
-    device.cmd_clear_color_image(cmd, image, vk::ImageLayout::GENERAL, &clear_color_value, &[image_subresource_range]);
-    */
     // end command buffer and submit
     device.end_command_buffer(cmd).unwrap();
     let buffers = [cmd];

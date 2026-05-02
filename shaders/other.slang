@@ -62,4 +62,56 @@ int global_face(int face, float3 sign) {
     return -1;
 }
 
+
+float2 flatten_uvs(int face, float3 dir_sign, float3 uvs) {
+    if (face == 0) {
+        return uvs.yz;
+    } else if (face == 1) {
+        return uvs.xz;
+    } else if (face == 2) {
+        return uvs.xy;
+    }
+
+    return -1;
+}
+
+uint3 unflatten_uvs(int face, bool negate, uint2 flattened) {
+    uint val = negate ? 3 : 0;
+    if (face == 0) {
+        return uint3(val, flattened.x, flattened.y);
+    } else if (face == 1) {
+        return uint3(flattened.x, val, flattened.y);
+    } else if (face == 2) {
+        return uint3(flattened.x, flattened.y, val);
+    }
+
+    return -1;
+}
+
+/*
+public static const int3[] FACE_NORMALS = {
+    int3(1, 0, 0),
+    int3(-1, 0, 0),
+    int3(0, 1, 0),
+    int3(0, -1, 0),
+    int3(0, 0, 1),
+    int3(0, 0, -1),
+};
+*/
+
+float3 transform_face_tangent_to_ws_normal(int global_face, float2 flattened) {
+    float val = (global_face % 2 == 0) ? 1 : -1;
+
+    if (global_face == 0 || global_face == 1) {
+        return float3(val, flattened.x, flattened.y);
+    } else if (global_face == 2 || global_face == 3) {
+        return float3(flattened.x, val, flattened.y);
+    } else if (global_face == 4 || global_face == 5) {
+        return float3(flattened.x, flattened.y, val);
+    }
+
+    return 0;
+}
+
+
 #endif

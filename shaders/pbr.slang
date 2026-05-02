@@ -40,8 +40,8 @@ float gsf(float roughness, float3 n, float3 v, float3 l) {
 
 // Fresnel function
 float3 fresnel(float3 f0, float3 h, float3 v) {
-	float cosTheta = max(dot(h, v), 0.0);
-    return f0 + (1.0 - f0) * pow (1.0 - cosTheta, 5.0);
+	float cosTheta = clamp(dot(h, v), 0.0, 1.0);
+    return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
 }
 
 // Fresnel function with roughness
@@ -54,7 +54,7 @@ float3 fresnelRoughness(float3 f0, float3 v, float3 x, float roughness) {
 float3 specular(float3 f0, float roughness, float3 v, float3 l, float3 n, float3 h) {
 	float3 num = ndf(roughness, n, h) * gsf(roughness, n, v, l) * fresnel(f0, h, v);
 	float denom = 4 * max(dot(v, n), 0.0) * max(dot(l, n), 0.0) + 0.0001;
-	return num;
+	return num / denom;
 }
 
 // Sun data struct
@@ -82,11 +82,9 @@ public struct PbrSurfaceData {
 	public float metallic;
 	public float visibility;
     public float3 shadows;
-	public float sky_visibility;
 };
 
-// Bidirectional reflectance distribution function, aka PBRRRR
-public float3 brdf(
+public float3 lighting(
 	PbrSurfaceData surface,
 	CameraData camera,
 	SunData light,
@@ -105,14 +103,11 @@ public float3 brdf(
 	// HACK: this (shadow mult) should be here right? no clue why it wasn't there in the original version
 	float3 specular_and_fresnel = (specular + fresnel(f0, half_view, camera.view)) * surface.shadows;
 
-	float3 brdf = kd * (surface.albedo) + specular_and_fresnel;
-	float3 lighting = float3(max(dot(light.direction, surface.normal), 0.0)) * surface.shadows;
-	brdf *= lighting * light.color;
+	float n_dot_l = max(dot(light.direction, surface.normal), 0.0);
+	
+	float3 outgoing_radiance = (kd * surface.albedo / PI + specular) * light.color * n_dot_l * surface.shadows;
 
 	// Diffuse Irradiance IBL
-	// TODO: can we use Slang auto-diff to compute the irradiance and specular IBL in a smarter way?
-    //float3 irradiance = sky(light.direction, surface.normal, true);
-
 	//float3 skyColor = sky(light.direction, float3(0, 0.8, 0), surface.position, false) + 0.1;
 	//float3 groundColor = sky(light.direction, float3(0, 0.05, 0), surface.position, false) + 0.05f;
 	float3 skyColor = sky.skybox.Sample(float3(0, 0.8, 0)).xyz + 0.1;
@@ -128,7 +123,7 @@ public float3 brdf(
 
 
 	//float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
-	float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility * surface.sky_visibility;
+	float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility;
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
 	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
 
@@ -137,7 +132,7 @@ public float3 brdf(
 	//return specular_fresnel_ambient;
 	//return surface.sky_visibility;
 	//return environment_specular * environment_specular_fresnel_strength;
-	return brdf + ambient * 0.4;
+	return outgoing_radiance + ambient * 0.2;
 	//return brdf + ambient * 0.8 + environment_specular * environment_specular_fresnel_strength;
 	//return specular;
 	//return ambient * 0.5;

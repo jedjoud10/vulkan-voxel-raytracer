@@ -1,4 +1,4 @@
-use std::{ffi::{CStr, CString}, ops::Mul, str::FromStr};
+use std::{ffi::CString, str::FromStr};
 
 use ash::vk;
 use bytemuck::{Pod, Zeroable};
@@ -30,22 +30,6 @@ pub struct PushConstants2 {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct SkyComputePushConstants {
     pub sun: vek::Vec4<f32>,
-}
-
-pub struct ComputePipeline {
-    pub module: vk::ShaderModule,
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
-    pub pipeline_layout: vk::PipelineLayout,
-    pub pipeline: vk::Pipeline,
-}
-
-impl ComputePipeline {
-    pub unsafe fn destroy(self, device: &ash::Device) {
-        device.destroy_pipeline(self.pipeline, None);
-        device.destroy_pipeline_layout(self.pipeline_layout, None);
-        device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-        device.destroy_shader_module(self.module, None);
-    }
 }
 
 pub struct SingleEntryPointWrapper {
@@ -106,7 +90,6 @@ pub unsafe fn create_render_compute_pipeline(
         .create_shader_module(&render_compute_shader_module_create_info, None)
         .unwrap();
     log::debug!("created shader module");
-
     crate::debug::set_object_name(render_compute_shader_module, binder, "render compute shader module");
 
     let output = vk::DescriptorSetLayoutBinding::default()
@@ -114,63 +97,54 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
+    let bindings = [output];
+    let first_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings);
+    let first_descriptor_set_layout = device
+        .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
+        .unwrap();
+    crate::debug::set_object_name(first_descriptor_set_layout, binder, "render compute descriptor set layout 1 (per frame dst rt)");
+
     let svt_image = vk::DescriptorSetLayoutBinding::default()
-        .binding(1)
+        .binding(0)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
     let svt_meta_image = vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
+        .binding(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
     let svo_bitmasks = vk::DescriptorSetLayoutBinding::default()
-        .binding(3)
+        .binding(2)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
     let svo_indices = vk::DescriptorSetLayoutBinding::default()
-        .binding(4)
+        .binding(3)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let bindings_1 = [
-        output,
+    let skybox = vk::DescriptorSetLayoutBinding::default()
+        .binding(4)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1);
+    let bindings = [
         svt_image,
         svt_meta_image,
         svo_bitmasks,
         svo_indices,
-    ];
-    let first_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
-        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
-        .bindings(&bindings_1);
-    let first_descriptor_set_layout = device
-        .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
-        .unwrap();
-    crate::debug::set_object_name(first_descriptor_set_layout, binder, "render compute descriptor set layout 1");
-
-    let first_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
-        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
-        .bindings(&bindings_1);
-    let first_descriptor_set_layout = device
-        .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
-        .unwrap();
-
-    let skybox = vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1);
-    let bindings_2 = [
         skybox
     ];
     let second_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::empty())
-        .bindings(&bindings_2);
+        .bindings(&bindings);
     let second_descriptor_set_layout = device
         .create_descriptor_set_layout(&second_descriptor_set_layout_create_info, None)
         .unwrap();
-    crate::debug::set_object_name(second_descriptor_set_layout, binder, "render compute descriptor set layout 2");
+    crate::debug::set_object_name(second_descriptor_set_layout, binder, "render compute descriptor set layout 2 (constant stuff)");
 
     let render_compute_descriptor_set_layouts = [first_descriptor_set_layout, second_descriptor_set_layout];
 

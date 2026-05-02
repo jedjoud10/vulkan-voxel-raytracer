@@ -7,19 +7,19 @@
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> output;
 
-[[vk::binding(1, 0)]]
+[[vk::binding(0, 1)]]
 RWTexture3D<uint8_t> svt;
 
-[[vk::binding(2, 0)]]
+[[vk::binding(1, 1)]]
 RWTexture3D<uint8_t> svt_metadata;
 
-[[vk::binding(3, 0)]]
+[[vk::binding(2, 1)]]
 StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 
-[[vk::binding(4, 0)]]
+[[vk::binding(3, 1)]]
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
-[[vk::binding(0, 1)]]
+[[vk::binding(4, 1)]]
 SamplerCube<float4> skybox;
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
@@ -117,13 +117,13 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             }
 
             if (special > 0.8 && metallic > 0.0) {
-                /*
+                
                 iterative_ray_pos = world + iterative_ray_dir * 0.001;
                 
-                const int ITERNUM = 256;
+                const int ITERNUM = 32;
 
-                float dt = 0.015;
-                float3 center = block_pos + 0.5; 
+                float dt = 0.045;
+                float3 center = block_pos + 0.5 + float3(sin(time), cos(time), sin(time * 0.4 + 4.1223)) * 0.2; 
                 float3 ray_velocity = iterative_ray_dir; 
 
                 [loop]
@@ -134,9 +134,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     float3 normalized_force_torwards_center = force_torwards_center / (pow(length(force_torwards_center) + 0.8, 8));
                     normalized_force_torwards_center *= (sin(time * 0.8) * 2.0);
 
-                    iterative_ray_dir += normalized_force_torwards_center * dt * 4.3;
+                    iterative_ray_dir += normalized_force_torwards_center * dt * 12.3;
                     iterative_ray_pos += normalize(iterative_ray_dir) * dt;
-                    color *= lerp(snoise(iterative_ray_pos * 4.8) * 0.5 + 0.5, hash33(floor(iterative_ray_pos * 32) * 4.2132) + 0.5, 0.98);
+                    //color *= lerp(snoise(iterative_ray_pos * 4.8) * 0.5 + 0.5, hash33(floor(iterative_ray_pos * 32) * 4.2132) + 0.5, 0.98);
 
                     if (any(floor(iterative_ray_pos) != block_pos)) {
                         break raymarch;
@@ -144,8 +144,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
 
                 iterative_ray_dir = normalize(iterative_ray_dir);
-                */
                 
+                /*
                 // mirror
                 // TODO: I wanted to get refractions working, but that requires more coordination between the ray-tracer and the lighting system
                 // the ray-tracer needs to keep track of the current "medium" in which the ray is traveling in, and discard that medium when a block of that medium comes up
@@ -161,6 +161,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 iterative_ray_dir = dir;
                 iterative_ray_pos = world + dir * 0.001;
                 color *= diffuse * metallic;
+                */
             } else {
                 // AMBIENT OCCLUSION
                 float ao = 1.0;
@@ -211,7 +212,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 //return;
 
                 float shadow = 1.0;
-                float sky_visibility = 1.0;
+
 
                 // SHADOW STUFF!!!!
                 float3 shadow_ray_start = world;
@@ -237,6 +238,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
 
                 /*
+                float sky_visibility = 1.0; 
                 // sky visibility is an extra term that is used for ambient lighting
                 if (roughness > 0.3) {
                     float3 reflected = reflect(iterative_ray_dir, normal);
@@ -256,15 +258,15 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 }
                 */
 
-                PbrSurfaceData pbr_surface_data = PbrSurfaceData(world, diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow, sky_visibility);
+                PbrSurfaceData pbr_surface_data = PbrSurfaceData(world, diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow);
                 CameraData camera_data = CameraData(-iterative_ray_dir);
 
                 // approximate sun color based on height
                 float3 sun_colour = sun_colour(sun.xyz);
-                SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (1.2 * sun_colour) : 0);
+                SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (3.2 * sun_colour) : 0);
                 SkyData sky_data = SkyData(skybox);
 
-                temp_color = brdf(pbr_surface_data, camera_data, sun_data, sky_data);
+                temp_color = lighting(pbr_surface_data, camera_data, sun_data, sky_data);
                 color *= temp_color;
 
                 /*
@@ -299,7 +301,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     
     switch (debug_type) {
         case DebugType::Combined:
-            output[id.xy] = float4(aces(color), 0);
+            output[id.xy] = float4(pow(aces(color), 1/2.2), 0);
             break;
         case DebugType::Iterations:
             output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
