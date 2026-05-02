@@ -31,7 +31,7 @@ pub unsafe fn create_skybox(
     pool: vk::CommandPool,
     queue_family_index: u32,
 ) -> Skybox {
-    let filter = vk::Filter::LINEAR;
+    let filter = vk::Filter::NEAREST;
     let resolution = RESOLUTION;
     let queue_family_indices = [queue_family_index];
     let format = vk::Format::R32G32B32A32_SFLOAT;
@@ -100,31 +100,6 @@ pub unsafe fn create_skybox(
     let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
     device.cmd_pipeline_barrier2(cmd, &dep);
 
-    let mut texels = Vec::<vek::Vec4<f32>>::new();
-    for layer in 0..6 {
-        for x in 0..resolution {
-            for y in 0..resolution {
-                texels.push(vek::Vec4::new(x as f32 / resolution as f32, y as f32 / resolution as f32, layer as f32 / 6.0, 1.0));
-            }
-        }
-    }
-
-    let staging_buffer = buffer::create_staging_buffer2(device, allocator, bytemuck::cast_slice(texels.as_slice()));
-    
-    let image_subresource_layers = vk::ImageSubresourceLayers::default()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
-        .layer_count(6)
-        .mip_level(0)
-        .base_array_layer(0);
-    device.cmd_copy_buffer_to_image(cmd, staging_buffer.buffer, image, vk::ImageLayout::GENERAL, &[vk::BufferImageCopy::default()
-        .buffer_offset(0)
-        .buffer_image_height(0)
-        .buffer_row_length(0)
-        .image_extent(vk::Extent3D::default().depth(1).width(resolution).height(resolution))
-        .image_offset(vk::Offset3D::default())
-        .image_subresource(image_subresource_layers)
-    ]);
-
     // end command buffer and submit
     device.end_command_buffer(cmd).unwrap();
     let buffers = [cmd];
@@ -132,8 +107,6 @@ pub unsafe fn create_skybox(
         .command_buffers(&buffers);
     device.queue_submit(queue, & [submit], vk::Fence::null()).unwrap();
     device.device_wait_idle().unwrap();
-
-    drop(staging_buffer);
 
     let subresource_range = vk::ImageSubresourceRange::default()
         .aspect_mask(vk::ImageAspectFlags::COLOR)

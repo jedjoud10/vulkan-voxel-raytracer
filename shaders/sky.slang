@@ -63,7 +63,6 @@ static const float3 absorb_extinction = float3(0.000650, 0.001881, 0.000085);
 static const float3 ground_albedo = float3(0.0);
 
 static const float3 cam_pos = float3(0.0, 0.8, 0.0); // camera position
-static const float3 sun_dir = normalize(float3(0.0, 0.1, 1.0)); // sun direction
 
 static const float PI = 3.14159265358979323846;
 
@@ -134,7 +133,10 @@ float3 optical_depth(float3 ray, float3 dir) {
 // attenuation integral
 float3 attenuate(float3 a, float3 b) {
     // prevent division by zero
-    return lerp((exp(-a) - exp(-b)) / (b - a), exp(-a), select(a == b, 1, 0));
+    let fst = (exp(-a) - exp(-b)) / (b - a);
+    let snd = exp(-a);
+    return select(abs(a - b) < 0.00001, snd, fst);
+    //return lerp((exp(-a) - exp(-b)) / (b - a), exp(-a), select(a == b, 1, 0));
 }
 
 // scattering
@@ -245,6 +247,7 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
 
     float3 res = scatter(ray_start, ray_dir, normalize(sun_dir), planet.x) * 4 * dayTime;
 
+    /*
     if (extraLightEnabled) {
         float sunSpot = max(dot(ray_dir, sun_dir), 0.0);
         float sunMask = pow(sunSpot, 64.0) * dayTime;
@@ -262,8 +265,9 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
     if (clouds_enabled) {
         clouds_res = clouds(sun_dir, ray_dir, ray_pos);
     }
-
     return lerp(res, clouds_res.colour, clouds_res.opacity);
+    */
+    return res;
 }
 
 

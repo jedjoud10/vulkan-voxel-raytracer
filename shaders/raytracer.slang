@@ -20,6 +20,9 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
 [[vk::binding(4, 1)]]
+StructuredBuffer<float4> lights_buffer;
+
+[[vk::binding(5, 1)]]
 SamplerCube<float4> skybox;
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
@@ -85,9 +88,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float3 normal = get_face_normal(ray.face, sign(iterative_ray_dir));
 
             // fetch the nth normal and world position
-            if ((((uint)round(time)) % MAX_ITERATIONS) == i) {
+            if (i == 0) {
                 nth_normals = normal;
-                nth_world = world;
+                nth_world = block_pos;
             }
 
             if (ROUND_NORMALS) {
@@ -228,11 +231,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         float d = 0;
                         float strength = pow(dot(dir, sun.xyz), 40);
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, world).opacity))) / SHADOW_SAMPLES;
+                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, shadow_ray_start).opacity))) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, world).opacity));
+                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start).opacity));
                 } else {
                     shadow = 1.0;
                 }
@@ -267,6 +270,22 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 SkyData sky_data = SkyData(skybox);
 
                 temp_color = lighting(pbr_surface_data, camera_data, sun_data, sky_data);
+
+                /*
+                for (int l = 0; l < 10; l++) {
+                    float3 light_pos = lights_buffer[l].xyz;
+                    float3 light_towards_position = shadow_ray_start - light_pos;
+
+                    if (length(light_towards_position) < 10) {
+                        float unshadowed_dist = length(light_towards_position);
+                        light_towards_position = normalize(light_towards_position);
+                        float shadowed_dist = trace_shi<4096>(light_pos, light_towards_position, svo, stats).distance;
+                        float shadow = (((shadowed_dist + 0.1) > unshadowed_dist) ? 1.0 : 0);
+                        temp_color += shadow * hash33(l * 3.21312) * 0.1;
+                    }
+                }
+                */
+
                 color *= temp_color;
 
                 /*
@@ -313,7 +332,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4(nth_normals, 0);
             break;
         case DebugType::World:
-            output[id.xy] = float4((nth_world % 10) / 10.0, 0);
+            output[id.xy] = float4((nth_world % 16) / 16, 0);
             break;
         case DebugType::ExitType:
             output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);

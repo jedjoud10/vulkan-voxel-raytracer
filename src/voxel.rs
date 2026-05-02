@@ -10,6 +10,7 @@ mod util;
 use recursive::*;
 use sparse::*;
 use util::*;
+pub use util::{TOTAL_SIZE};
 
 pub use sparse::SparseVoxelOctree;
 
@@ -252,28 +253,32 @@ unsafe fn create_sparse_voxel_texture(
     let (metadata_staging_buffer, metadata_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &metadata_image_bytes);
 
     // create staging buffer to copy sparse texel data 
-    let (sparse_staging_buffer, sparse_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &total_data_to_copy);
+    let opt_sparse_staging_buffer_and_allocation_and_copies = if total_data_to_copy.len() > 0 {
+        let (sparse_staging_buffer, sparse_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &total_data_to_copy);
 
-    // create the actual memory copies depending on binding chunks
-    let mut buffer_image_copies = Vec::<vk::BufferImageCopy>::new();
+        // create the actual memory copies depending on binding chunks
+        let mut buffer_image_copies = Vec::<vk::BufferImageCopy>::new();
 
-    for (origin, offset) in binding_chunks {
-        buffer_image_copies.push(vk::BufferImageCopy::default()
-            .buffer_offset(offset as u64)
-            .buffer_image_height(0)
-            .buffer_row_length(0)
-            .image_extent(vk::Extent3D::default().depth(axis_granularity).width(axis_granularity).height(axis_granularity))
-            .image_offset(vk::Offset3D::default().x(origin.x as i32).y(origin.y as i32).z(origin.z as i32))
-            .image_subresource(image_subresource_layers)
-        );
-    }
+        for (origin, offset) in binding_chunks {
+            buffer_image_copies.push(vk::BufferImageCopy::default()
+                .buffer_offset(offset as u64)
+                .buffer_image_height(0)
+                .buffer_row_length(0)
+                .image_extent(vk::Extent3D::default().depth(axis_granularity).width(axis_granularity).height(axis_granularity))
+                .image_offset(vk::Offset3D::default().x(origin.x as i32).y(origin.y as i32).z(origin.z as i32))
+                .image_subresource(image_subresource_layers)
+            );
+        }
 
-    // bind sparse chunks to image
-    let sparse_image_memory_bind_info = [vk::SparseImageMemoryBindInfo::default()
-        .binds(&sparse_image_memory_binds)
-        .image(sparse_image)];
-    let binds = [vk::BindSparseInfo::default().image_binds(&sparse_image_memory_bind_info)];
-    device.queue_bind_sparse(queue, &binds, vk::Fence::null()).unwrap();
+        // bind sparse chunks to image
+        let sparse_image_memory_bind_info = [vk::SparseImageMemoryBindInfo::default()
+            .binds(&sparse_image_memory_binds)
+            .image(sparse_image)];
+        let binds = [vk::BindSparseInfo::default().image_binds(&sparse_image_memory_bind_info)];
+        device.queue_bind_sparse(queue, &binds, vk::Fence::null()).unwrap();
+        Some((sparse_staging_buffer, sparse_staging_buffer_alloc, buffer_image_copies))
+    } else { None };
+    
 
     // create command buffer
     let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
@@ -313,7 +318,9 @@ unsafe fn create_sparse_voxel_texture(
     device.cmd_pipeline_barrier2(cmd, &dep);
 
     // do the sparse staging buffer to sparse image copy
-    device.cmd_copy_buffer_to_image(cmd, sparse_staging_buffer, sparse_image, vk::ImageLayout::GENERAL, &buffer_image_copies);
+    if let Some((sparse_staging_buffer, _, buffer_image_copies)) = opt_sparse_staging_buffer_and_allocation_and_copies.as_ref() {
+        device.cmd_copy_buffer_to_image(cmd, *sparse_staging_buffer, sparse_image, vk::ImageLayout::GENERAL, &buffer_image_copies);
+    }
 
     // do the metadata staging buffer to metadata image copy
     device.cmd_copy_buffer_to_image(cmd, metadata_staging_buffer, metadata_image, vk::ImageLayout::GENERAL, &[vk::BufferImageCopy::default()
@@ -334,8 +341,10 @@ unsafe fn create_sparse_voxel_texture(
     device.device_wait_idle().unwrap();
 
     // free staging buffers
-    allocator.free(sparse_staging_buffer_alloc).unwrap();
-    device.destroy_buffer(sparse_staging_buffer, None);
+    if let Some((sparse_staging_buffer, sparse_staging_buffer_alloc, _)) = opt_sparse_staging_buffer_and_allocation_and_copies {
+        allocator.free(sparse_staging_buffer_alloc).unwrap();
+        device.destroy_buffer(sparse_staging_buffer, None);
+    }
     allocator.free(metadata_staging_buffer_alloc).unwrap();
     device.destroy_buffer(metadata_staging_buffer, None);            
 

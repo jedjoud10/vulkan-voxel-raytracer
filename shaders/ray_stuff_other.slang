@@ -45,10 +45,30 @@ bool ray_box_intersection(
     return max(tmin, 0) <= tmax;
 }
 
+bool ray_box_intersection2(
+    float3 inv_dir,
+    int8_t3 dir_sign,
+    float3 ray_pos,
+    float3 aabb_min,
+    float3 aabb_max,
+) {
+    float3 t1 = (aabb_min - ray_pos) * inv_dir * dir_sign;
+    float3 t2 = (aabb_max - ray_pos) * inv_dir * dir_sign;
+
+    float3 k1 = min(t1, t2);
+    float3 k2 = max(t1, t2);
+
+    float tmin = max3(k1.x, k1.y, k1.z);
+    float tmax = min3(k2.x, k2.y, k2.z);
+
+    return max(tmin, 0) <= tmax;
+}
+
 struct DdaTraversalOutput {
     bool hit;
     float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
     uint3 block_pos; // this is always 100% accurate when we reach the bottom most node of the acceleration structure
+    float distance;
     uint8_t face;
 }
 
@@ -133,14 +153,14 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
                 if (new_base_index == FULL_NODE || K <= END) {
                     float tmin = 0;
                     ray_box_intersection(inv_dir, dir_sign, ray_pos, origin, origin+voxel_size, tmin);
-
-                    uint3 block_pos = floor(ray_pos+tmin*ray_dir);
+                    float3 world = ray_pos + ray_dir * (tmin - EPS);
+                    uint3 block_pos = floor(world);
 
                     // apply "accurate" block pos since we know the bounds of the full node and input face
                     int3 tmp_sign = max(0, -dir_sign);
-                    block_pos[face] = origin[face] + tmp_sign[face] * voxel_size;
+                    block_pos[face] = origin[face] + tmp_sign[face] * (voxel_size-1);
 
-                    return DdaTraversalOutput(true, ray_pos+tmin*ray_dir, block_pos, face);
+                    return DdaTraversalOutput(true, world, block_pos, tmin, face);
                 }
 
                 // TODO:
@@ -168,9 +188,37 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
             } else {
                 float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
                 stats.exit_type = 3;
+
+                /*
+                for (int i = 0; i < 8; i++) {
+                    stats.iterations += 1;
+
+                    if (ray_box_intersection2(inv_dir, dir_sign, ray_pos, clamp(origin + hash33(i+origin), origin, origin+1), clamp(origin + hash33(i+origin * 3.1232), origin, origin+1))) {
+                        return DdaTraversalOutput(true, world, origin, face);
+                    }
+                } 
+                */
+                
+                /*
+                if (sin(world.x * 3) > 0) {
+                    return DdaTraversalOutput(true, world, origin, face);
+                }
+                */
+                    
+                /*
+                float3 center = origin + 0.5;
+                for (int i = 0; i < 64; i++) {
+                    stats.iterations += 1;
+                    float d = length(center - world) - 0.3 + snoise(world * 3.2) * 0.1;
+                    if (d < 0.02) {
+                        return DdaTraversalOutput(true, world, origin, 0, face);
+                    }    
+                    world += ray_dir * d;
+                } 
+                */
                 // TODO: i have removed this as it does nothing: clamp(world, parent_world_space_origin, parent_world_space_origin+voxel_size*4)
                 // if something goes wrong add it again 
-                return DdaTraversalOutput(true, world, origin, face);
+                return DdaTraversalOutput(true, world, origin, distance_to_surface - EPS, face);
             }
         }
 

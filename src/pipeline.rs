@@ -126,8 +126,13 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let skybox = vk::DescriptorSetLayoutBinding::default()
+    let lights_buffer = vk::DescriptorSetLayoutBinding::default()
         .binding(4)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
+    let skybox = vk::DescriptorSetLayoutBinding::default()
+        .binding(5)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1);
@@ -136,6 +141,7 @@ pub unsafe fn create_render_compute_pipeline(
         svt_meta_image,
         svo_bitmasks,
         svo_indices,
+        lights_buffer,
         skybox
     ];
     let second_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()

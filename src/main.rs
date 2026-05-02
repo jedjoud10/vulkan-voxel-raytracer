@@ -100,6 +100,7 @@ impl ConstantDescriptorSets {
         skybox: &Skybox,
         svt: &SparseVoxelTexture,
         svo: &SparseVoxelOctree,
+        lights_buffer: &buffer::Buffer,
     ) -> Self {
         let constant_descriptor_set_layouts = [render_compute_pipeline.descriptor_set_layout[1], sky_compute_pipeline.descriptor_set_layout[0]];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
@@ -141,13 +142,17 @@ impl ConstantDescriptorSets {
             .buffer(svo.index_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
+        let descriptor_light_buffer_info = vk::DescriptorBufferInfo::default()
+            .buffer(lights_buffer.buffer)
+            .offset(0)
+            .range(u64::MAX);
         let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
             .image_view(skybox.image_view)
             .sampler(skybox.sampler)
             .image_layout(vk::ImageLayout::GENERAL);
  
         let descriptor_svt_image_infos = [descriptor_svt_image_info, descriptor_svt_metadata_image_info];
-        let descriptor_svo_buffers_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info];
+        let descriptor_svo_buffers_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info, descriptor_light_buffer_info];
         let descriptor_skybox_combined_image_sampler_infos = [descriptor_skybox_image_info];
 
         let render_compute_svt_images_descriptor_write = vk::WriteDescriptorSet::default()
@@ -165,7 +170,7 @@ impl ConstantDescriptorSets {
         let render_compute_skybox_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_skybox_combined_image_sampler_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .dst_binding(4)
+            .dst_binding(5)
             .dst_set(render_compute_pipeline_descriptor_set)
             .image_info(&descriptor_skybox_combined_image_sampler_infos);
         
@@ -352,6 +357,8 @@ struct InternalApp {
     svt: SparseVoxelTexture,
 
     skybox: Skybox,
+    lights_buffer: buffer::Buffer,
+    lights: Vec<vek::Vec4<f32>>,
 
     ticker: ticker::Ticker,
     sun: vek::Vec3<f32>,
@@ -546,7 +553,20 @@ impl InternalApp {
         }
         log::info!("created frames in flight structures");
 
-        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, pool, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &skybox, &svt, &svo);
+        let lights_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<vek::Vec4<f32>>() * 10, &debug_marker, "lights buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let mut lights = Vec::<vek::Vec4<f32>>::new();
+
+        for i in 0..10 {
+            let x = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
+            let y = rand::random_range(500f32..(voxel::TOTAL_SIZE as f32));
+            let z = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
+            lights.push(vek::Vec4::new(x,y,z, 1.0));
+        }
+
+        buffer::write_to_buffer(&device, pool, queue, lights_buffer.buffer, &mut allocator, bytemuck::cast_slice(lights.as_slice()));
+        log::info!("created lights buffer");
+
+        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, pool, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
         log::info!("created constant descriptor sets");
 
         let query_pool = query::create_query_pool(&device);
@@ -561,6 +581,7 @@ impl InternalApp {
             entry,
             device,
             physical_device,
+            lights_buffer,
             surface_loader,
             surface_khr,
             debug: debug_messenger,
@@ -587,6 +608,7 @@ impl InternalApp {
             debug_type: 0,
             stats: Default::default(),
             args,
+            lights,
         }
     }
 
@@ -693,6 +715,12 @@ impl InternalApp {
 
         self.device.reset_fences(&[end_fence]).unwrap();
 
+
+        for (i, light) in self.lights.iter_mut().enumerate() { 
+            let tmp = vek::Lerp::lerp(light.xyz(), self.movement.position + vek::Vec3::new((i as f32).sin(), 0.0, (i as f32).cos()) * 0.05f32, 3.5 * delta);
+            *light = vek::Vec4::from_point(tmp);
+        }
+
         let (acquired_swapchain_image_index, _) = self
             .swapchain_loader
             .acquire_next_image(
@@ -709,12 +737,14 @@ impl InternalApp {
         let src_image= rt_image;
 
         let cmd_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::empty());
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         self.device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()).unwrap();
         self.device
             .begin_command_buffer(cmd, &cmd_buffer_begin_info)
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
+
+        self.device.cmd_update_buffer(cmd, self.lights_buffer.buffer, 0, bytemuck::cast_slice(&self.lights));
 
         //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
@@ -756,7 +786,7 @@ impl InternalApp {
             sun: self.sun.normalized().with_w(0f32),
         };
         self.device.cmd_push_constants(cmd, self.sky_compute_pipeline.entry_points[0].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytemuck::bytes_of(&push_constants));
-        self.device.cmd_dispatch(cmd, skybox::RESOLUTION / 32, skybox::RESOLUTION / 32, 6);
+        self.device.cmd_dispatch(cmd, skybox::RESOLUTION.div_ceil(32), skybox::RESOLUTION.div_ceil(32), 6);
 
         let skybox_subresource_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -959,6 +989,9 @@ impl InternalApp {
 
         self.skybox.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed skybox");
+
+        self.lights_buffer.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed lights buffer");
 
         self.device.destroy_query_pool(self.query_pool, None);
         log::info!("destroyed query pool");

@@ -301,6 +301,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
                 // node is not full, we must compute bitmask of children and stuff
                 if let Some(children) = node.children.as_ref() {
                     for (pci, (ci, child)) in children.iter().enumerate().filter_map(|(ci, x)| x.as_ref().map(|x| (ci, x))).enumerate() {
+                        // `self_packed_child_offset = pci` assumes that we are doing this in BFS order. with DFS order, that is no longer the case
                         queue.push_back(TraversalNode { node: &nodes[*child], height: height - 1, parent_base_child_index: Some(base_child_index as usize), self_packed_child_offset: pci });
                         test_count += 1;
 
