@@ -6,6 +6,7 @@ use crate::buffer;
 pub struct Skybox {
     pub image: vk::Image,
     pub image_view: vk::ImageView,
+    pub array_image_view: vk::ImageView,
     pub sampler: vk::Sampler,
     pub allocation: Allocation,
 }
@@ -13,11 +14,14 @@ pub struct Skybox {
 impl Skybox {
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
         device.destroy_image_view(self.image_view, None);
+        device.destroy_image_view(self.array_image_view, None);
         device.destroy_image(self.image, None);
         device.destroy_sampler(self.sampler, None);
         allocator.free(self.allocation).unwrap();
     }
 }
+
+pub const RESOLUTION: u32 = 256;
 
 pub unsafe fn create_skybox(
     device: &ash::Device,
@@ -27,8 +31,8 @@ pub unsafe fn create_skybox(
     pool: vk::CommandPool,
     queue_family_index: u32,
 ) -> Skybox {
-    let filter = vk::Filter::NEAREST;
-    let resolution = 32;
+    let filter = vk::Filter::LINEAR;
+    let resolution = RESOLUTION;
     let queue_family_indices = [queue_family_index];
     let format = vk::Format::R32G32B32A32_SFLOAT;
 
@@ -44,7 +48,7 @@ pub unsafe fn create_skybox(
         .mip_levels(1)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
-        .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+        .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::STORAGE)
         .samples(vk::SampleCountFlags::TYPE_1)
         .queue_family_indices(&queue_family_indices)
         .tiling(vk::ImageTiling::OPTIMAL)
@@ -155,6 +159,17 @@ pub unsafe fn create_skybox(
         .create_image_view(&image_view_create_info, None)
         .unwrap();
 
+    let array_image_view_create_info = vk::ImageViewCreateInfo::default()
+        .components(vk::ComponentMapping::default())
+        .flags(vk::ImageViewCreateFlags::empty())
+        .format(format)
+        .image(image)
+        .subresource_range(subresource_range)
+        .view_type(vk::ImageViewType::TYPE_2D_ARRAY);
+    let array_image_view = device
+        .create_image_view(&array_image_view_create_info, None)
+        .unwrap();
+
     let sampler_create_info = vk::SamplerCreateInfo::default()
         .mag_filter(filter)
         .min_filter(filter)
@@ -169,5 +184,6 @@ pub unsafe fn create_skybox(
         image_view,
         allocation,
         sampler,
+        array_image_view,
     }
 }

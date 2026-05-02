@@ -85,6 +85,12 @@ struct Args {
     group_size_exp: u32,
 }
 
+struct PerFrameDescriptorSets {
+    main_render_storage_images_buffers: vk::DescriptorSet,
+    main_render_skybox: vk::DescriptorSet,
+    sky_compute_skybox: vk::DescriptorSet,
+}
+
 struct PerFrameData {
     swapchain_image: vk::Image,
     rt_image: vk::Image,
@@ -93,9 +99,111 @@ struct PerFrameData {
     render_finished_semaphore: vk::Semaphore,
     end_fence: vk::Fence,
     cmd: vk::CommandBuffer,
-    all_descriptor_sets_for_frame: Vec<vk::DescriptorSet>,
+    descriptor_sets: PerFrameDescriptorSets,
     src_image_view: vk::ImageView,
     dst_image_view: vk::ImageView,
+}
+
+impl PerFrameData {
+    unsafe fn create_per_frame_data(
+        device: &ash::Device,
+        pool: vk::CommandPool,
+        swapchain_format: vk::Format,
+        descriptor_pool: vk::DescriptorPool,
+        render_compute_pipeline: &RenderPipeline,
+        sky_compute_pipeline: &SkyPipeline,
+        rt_image: vk::Image,
+        rt_image_allocation: Allocation,
+        swapchain_image: vk::Image
+    ) -> Self {
+        let present_complete_semaphore = device
+            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+            .unwrap();
+        let render_finished_semaphore = device
+            .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+            .unwrap();
+        let end_fence = device.create_fence(&Default::default(), None).unwrap();
+        log::info!("created semaphores and fence");
+
+        let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
+            .command_buffer_count(1)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_pool(pool);
+        let cmd = device
+            .allocate_command_buffers(&cmd_buffer_create_info)
+            .unwrap()[0];
+
+        let layouts = render_compute_pipeline.descriptor_set_layout.iter().copied().chain(sky_compute_pipeline.descriptor_set_layout.iter().copied()).collect::<Vec<_>>();
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&layouts);
+        let all_descriptor_sets_for_frame = device
+            .allocate_descriptor_sets(&descriptor_set_allocate_info)
+            .unwrap();
+
+        let mut tmp = Self {
+            swapchain_image,
+            rt_image,
+            rt_image_allocation: None,
+            present_complete_semaphore,
+            render_finished_semaphore,
+            end_fence,
+            cmd,
+            descriptor_sets: PerFrameDescriptorSets {
+                main_render_storage_images_buffers: all_descriptor_sets_for_frame[0],
+                main_render_skybox: all_descriptor_sets_for_frame[1],
+                sky_compute_skybox: all_descriptor_sets_for_frame[2],
+            },
+            src_image_view: vk::ImageView::null(),
+            dst_image_view: vk::ImageView::null(),
+        };
+
+        tmp.recreate_image_views(device, swapchain_format, rt_image, rt_image_allocation, swapchain_image);
+
+        tmp
+    }
+
+    unsafe fn recreate_image_views(
+        &mut self,
+        device: &ash::Device,
+        swapchain_format: vk::Format,
+        rt_image: vk::Image,
+        rt_image_allocation: Allocation,
+        swapchain_image: vk::Image    
+    ) {
+        self.rt_image = rt_image;
+        self.rt_image_allocation = Some(rt_image_allocation);
+        self.swapchain_image = swapchain_image;
+
+        let subresource_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+
+        let src_image_view_create_info = vk::ImageViewCreateInfo::default()
+            .components(vk::ComponentMapping::default())
+            .flags(vk::ImageViewCreateFlags::empty())
+            .format(swapchain_format)
+            .image(rt_image)
+            .subresource_range(subresource_range)
+            .view_type(vk::ImageViewType::TYPE_2D);
+
+        let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
+            .components(vk::ComponentMapping::default())
+            .flags(vk::ImageViewCreateFlags::empty())
+            .format(swapchain_format)
+            .image(self.swapchain_image)
+            .subresource_range(subresource_range)
+            .view_type(vk::ImageViewType::TYPE_2D);
+
+        self.src_image_view = device
+            .create_image_view(&src_image_view_create_info, None)
+            .unwrap();
+        self.dst_image_view = device
+            .create_image_view(&dst_image_view_create_info, None)
+            .unwrap();
+
+    }
 }
 
 struct InternalApp {
@@ -127,6 +235,7 @@ struct InternalApp {
     pool: vk::CommandPool,
 
     render_compute_pipeline: RenderPipeline,
+    sky_compute_pipeline: SkyPipeline,
 
     query_pool: vk::QueryPool,
     timestamp_period: f32,
@@ -150,6 +259,7 @@ impl InternalApp {
     pub unsafe fn new(event_loop: &ActiveEventLoop, args: Args) -> Self {
         let mut assets = HashMap::<&str, &[u32]>::new();
         asset!("raytracer.spv", assets);
+        asset!("sky_compute.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -239,7 +349,7 @@ impl InternalApp {
             .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
         let pool = device.create_command_pool(&pool_create_info, None).unwrap();
-        log::info!("create cmd pool");
+        log::info!("created cmd pool");
 
         let mut extent = vk::Extent2D {
             width: 800,
@@ -302,6 +412,9 @@ impl InternalApp {
         let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raytracer.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
+        let sky_compute_pipeline = pipeline::create_sky_pipeline(&*assets["sky_compute.spv"], &device, &debug_marker);
+        log::info!("created sky compute pipeline");
+
         let (svo, svt) = voxel::create_sparse_structures(
             &device,
             &mut allocator,
@@ -325,73 +438,7 @@ impl InternalApp {
         log::info!("creating frames in flight structures...");
         let mut frames_in_flight = Vec::<PerFrameData>::new();
         for ((rt_image, rt_image_allocation), swapchain_image) in rt_images.into_iter().zip(images.into_iter()) {
-            let begin_semaphore = device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                .unwrap();
-            let end_semaphore = device
-                .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                .unwrap();
-            let end_fence = device.create_fence(&Default::default(), None).unwrap();
-            log::info!("created semaphores and fence");
-
-            
-            let subresource_range = vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1);
-
-            let src_image_view_create_info = vk::ImageViewCreateInfo::default()
-                .components(vk::ComponentMapping::default())
-                .flags(vk::ImageViewCreateFlags::empty())
-                .format(swapchain_format)
-                .image(rt_image)
-                .subresource_range(subresource_range)
-                .view_type(vk::ImageViewType::TYPE_2D);
-
-            let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
-                .components(vk::ComponentMapping::default())
-                .flags(vk::ImageViewCreateFlags::empty())
-                .format(swapchain_format)
-                .image(swapchain_image)
-                .subresource_range(subresource_range)
-                .view_type(vk::ImageViewType::TYPE_2D);
-
-            let src_image_view = device
-                .create_image_view(&src_image_view_create_info, None)
-                .unwrap();
-            let dst_image_view = device
-                .create_image_view(&dst_image_view_create_info, None)
-                .unwrap();
-
-            let cmd_buffer_create_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(1)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_pool(pool);
-            let cmd = device
-                .allocate_command_buffers(&cmd_buffer_create_info)
-                .unwrap()[0];            
-
-            let layouts = &render_compute_pipeline.descriptor_set_layout;
-            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(descriptor_pool)
-                .set_layouts(layouts);
-            let all_descriptor_sets_for_frame = device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)
-                .unwrap();
-
-            frames_in_flight.push(PerFrameData {
-                swapchain_image,
-                rt_image,
-                rt_image_allocation: Some(rt_image_allocation),
-                present_complete_semaphore: begin_semaphore,
-                render_finished_semaphore: end_semaphore,
-                end_fence,
-                cmd,
-                all_descriptor_sets_for_frame,
-                src_image_view,
-                dst_image_view,
-                
-            });
+            frames_in_flight.push(PerFrameData::create_per_frame_data(&device, pool, swapchain_format, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, rt_image, rt_image_allocation, swapchain_image));
         }
 
         let query_pool = query::create_query_pool(&device);
@@ -417,6 +464,7 @@ impl InternalApp {
             queue,
             pool,
             render_compute_pipeline,
+            sky_compute_pipeline,
             descriptor_pool,
             query_pool,
             timestamp_period,
@@ -467,10 +515,6 @@ impl InternalApp {
             &self.debug_marker,
         );
 
-        for (frame, swapchain_image) in self.frames_in_flight.iter_mut().zip(images) {
-            frame.swapchain_image = swapchain_image;
-        }
-
         self.swapchain_loader = swapchain_loader;
         self.swapchain_format = swapchain_format;
         self.swapchain = swapchain;
@@ -501,38 +545,8 @@ impl InternalApp {
             self.queue,
         );
 
-        for (frame, (rt_image, rt_image_allocation)) in self.frames_in_flight.iter_mut().zip(rt_images) {
-            frame.rt_image = rt_image;
-            frame.rt_image_allocation = Some(rt_image_allocation);
-
-            let subresource_range = vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1);
-
-            let src_image_view_create_info = vk::ImageViewCreateInfo::default()
-                .components(vk::ComponentMapping::default())
-                .flags(vk::ImageViewCreateFlags::empty())
-                .format(swapchain_format)
-                .image(rt_image)
-                .subresource_range(subresource_range)
-                .view_type(vk::ImageViewType::TYPE_2D);
-
-            let dst_image_view_create_info = vk::ImageViewCreateInfo::default()
-                .components(vk::ComponentMapping::default())
-                .flags(vk::ImageViewCreateFlags::empty())
-                .format(swapchain_format)
-                .image(frame.swapchain_image)
-                .subresource_range(subresource_range)
-                .view_type(vk::ImageViewType::TYPE_2D);
-
-            frame.src_image_view = self.device
-                .create_image_view(&src_image_view_create_info, None)
-                .unwrap();
-            frame.dst_image_view = self.device
-                .create_image_view(&dst_image_view_create_info, None)
-                .unwrap();
-
+        for ((frame, (rt_image, rt_image_allocation)), swapchain_image) in self.frames_in_flight.iter_mut().zip(rt_images).zip(images) {
+            frame.recreate_image_views(&self.device, swapchain_format, rt_image, rt_image_allocation, swapchain_image);
         }
 
         self.device.device_wait_idle().unwrap();
@@ -546,7 +560,7 @@ impl InternalApp {
             present_complete_semaphore,
             end_fence,
             cmd,
-            all_descriptor_sets_for_frame,
+            descriptor_sets,
             src_image_view,
             ..
         } = &self.frames_in_flight[frame_index as usize];
@@ -557,7 +571,6 @@ impl InternalApp {
         let present_complete_semaphores = [*present_complete_semaphore];
         let end_fence = *end_fence;
         let src_image_view = *src_image_view;
-        let all_descriptor_sets_for_frame = all_descriptor_sets_for_frame;
 
         if let Err(err) = self.device.wait_for_fences(&[end_fence], true, u64::MAX) {
             log::error!("wait on fence err: {:?}", err);
@@ -617,12 +630,61 @@ impl InternalApp {
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
         self.device.cmd_pipeline_barrier2(cmd, &dep);
 
-        /*
-        self.device.cmd_clear_color_image(cmd, dst_image, vk::ImageLayout::GENERAL, &vk::ClearColorValue {
-            float32: [elapsed.sin() * 0.5 + 0.5; 4]
-            }, &[subresource_range]);
-        */
+        let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
+            .image_view(self.skybox.array_image_view)
+            .sampler(vk::Sampler::null())
+            .image_layout(vk::ImageLayout::GENERAL);
 
+        let descriptor_image_infos = [descriptor_skybox_image_info];
+
+        let image_descriptor_write_2 = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .dst_binding(0)
+            .dst_set(descriptor_sets.sky_compute_skybox)
+            .image_info(&descriptor_image_infos);
+        
+        // TODO: remove this as it is wasteful
+        // no need to update descriptor sets each frame... most resource references are constant anyways, other than the per-frame image view
+        self.device.update_descriptor_sets(&[image_descriptor_write_2], &[]);
+        self.device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.sky_compute_pipeline.entry_points[0].pipeline_layout,
+            0,
+            &[descriptor_sets.sky_compute_skybox],
+            &[],
+        );
+        self.device.cmd_bind_pipeline(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.sky_compute_pipeline.entry_points[0].pipeline,
+        );
+
+        let push_constants = pipeline::SkyComputePushConstants {
+            sun: self.sun.normalized().with_w(0f32),
+        };
+        self.device.cmd_push_constants(cmd, self.sky_compute_pipeline.entry_points[0].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytemuck::bytes_of(&push_constants));
+        self.device.cmd_dispatch(cmd, skybox::RESOLUTION / 32, skybox::RESOLUTION / 32, 6);
+
+        let skybox_subresource_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(6);
+        let skybox_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(self.skybox.image)
+            .subresource_range(skybox_subresource_range);
+        let image_memory_barriers = [skybox_image_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        self.device.cmd_pipeline_barrier2(cmd, &dep);
 
 
         let descriptor_rt_image_info = vk::DescriptorImageInfo::default()
@@ -658,29 +720,30 @@ impl InternalApp {
             .descriptor_count(descriptor_image_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
-            .dst_set(all_descriptor_sets_for_frame[0])
+            .dst_set(descriptor_sets.main_render_storage_images_buffers)
             .image_info(&descriptor_image_infos);
         let buffer_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .dst_binding(3)
-            .dst_set(all_descriptor_sets_for_frame[0])
+            .dst_set(descriptor_sets.main_render_storage_images_buffers)
             .buffer_info(&descriptor_svo_infos);
         let image_descriptor_write_2 = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_svo_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .dst_binding(0)
-            .dst_set(all_descriptor_sets_for_frame[1])
+            .dst_set(descriptor_sets.main_render_skybox)
             .image_info(&descriptor_image_infos_2);
         
-
+        // TODO: remove this as it is wasteful
+        // no need to update descriptor sets each frame... most resource references are constant anyways, other than the per-frame image view
         self.device.update_descriptor_sets(&[image_descriptor_write, buffer_descriptor_write, image_descriptor_write_2], &[]);
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
             self.render_compute_pipeline.entry_points[0].pipeline_layout,
             0,
-            &all_descriptor_sets_for_frame[0..2],
+            &[descriptor_sets.main_render_storage_images_buffers, descriptor_sets.main_render_skybox],
             &[],
         );
         self.device.cmd_bind_pipeline(
@@ -842,6 +905,9 @@ impl InternalApp {
 
         self.render_compute_pipeline.destroy(&self.device);
         log::info!("destroyed render compute pipeline");
+
+        self.sky_compute_pipeline.destroy(&self.device);
+        log::info!("destroyed sky compute pipeline");
 
         self.device.destroy_descriptor_pool(self.descriptor_pool, None);
         log::info!("destroyed descriptor pool");

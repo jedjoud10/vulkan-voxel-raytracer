@@ -26,6 +26,12 @@ pub struct PushConstants2 {
     pub delta: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct SkyComputePushConstants {
+    pub sun: vek::Vec4<f32>,
+}
+
 pub struct ComputePipeline {
     pub module: vk::ShaderModule,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
@@ -72,6 +78,7 @@ impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeli
 }
 
 pub type RenderPipeline = MultiComputePipeline<1, 2>;
+pub type SkyPipeline = MultiComputePipeline<1, 1>;
 
 #[derive(Pod, Zeroable, Copy, Clone)]
 #[repr(C)]
@@ -180,6 +187,60 @@ pub unsafe fn create_render_compute_pipeline(
         descriptor_set_layout: render_compute_descriptor_set_layouts,
         entry_points: [main_entry_point]
     }
+}
+
+pub unsafe fn create_sky_pipeline(
+    raw: &[u32],
+    device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
+) -> SkyPipeline {
+    let shader_module = create_shader_module(raw, device);
+    crate::debug::set_object_name(shader_module, binder, "sky compute shader module");
+
+    let skybox = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let bindings = [
+        skybox
+    ];
+
+    let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings);
+    let descriptor_set_layout = device
+        .create_descriptor_set_layout(&descriptor_set_layout_create_info, None)
+        .unwrap();
+    crate::debug::set_object_name(descriptor_set_layout, binder, "sky compute descriptor set layout");
+
+    let render_compute_descriptor_set_layouts = [descriptor_set_layout];
+
+    let size = size_of::<SkyComputePushConstants>();
+
+
+    let spec_constant_fields = [crate::skybox::RESOLUTION];
+    let spec_constants = spec_constant_fields.iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
+
+
+    let main_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "main", &render_compute_descriptor_set_layouts, Some(size), Some(spec_constants));
+    
+    return MultiComputePipeline {
+        module: shader_module,
+        descriptor_set_layout: render_compute_descriptor_set_layouts,
+        entry_points: [main_entry_point]
+    }
+}
+
+unsafe fn create_shader_module(raw: &[u32], device: &ash::Device) -> vk::ShaderModule {
+    let render_compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
+        .code(raw)
+        .flags(vk::ShaderModuleCreateFlags::empty());
+
+    let render_compute_shader_module = device
+        .create_shader_module(&render_compute_shader_module_create_info, None)
+        .unwrap();
+    render_compute_shader_module
 }
 
 /*
