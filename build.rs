@@ -79,8 +79,7 @@ fn main() {
         .no_mangle(true)
         .disable_specialization(false)
         .vulkan_use_entry_point_name(true)
-        .matrix_layout_row(true)
-        .emit_spirv_directly(true);
+        .matrix_layout_row(true);
 
     
     let target_desc = TargetDesc::default().format(CompileTarget::Spirv);

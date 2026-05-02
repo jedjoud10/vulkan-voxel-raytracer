@@ -82,15 +82,7 @@ pub unsafe fn create_render_compute_pipeline(
     binder: &Option<ash::ext::debug_utils::Device>,
     constants: RenderPipelineSpecConstants,
 ) -> RenderPipeline {
-    let render_compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
-        .code(raw)
-        .flags(vk::ShaderModuleCreateFlags::empty());
-
-    let render_compute_shader_module = device
-        .create_shader_module(&render_compute_shader_module_create_info, None)
-        .unwrap();
-    log::debug!("created shader module");
-    crate::debug::set_object_name(render_compute_shader_module, binder, "render compute shader module");
+    let render_compute_shader_module = create_shader_module(raw, device, binder, "render compute shader module");
 
     let output = vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -126,13 +118,18 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let lights_buffer = vk::DescriptorSetLayoutBinding::default()
+    let svo_aabbs = vk::DescriptorSetLayoutBinding::default()
         .binding(4)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let skybox = vk::DescriptorSetLayoutBinding::default()
+    let lights_buffer = vk::DescriptorSetLayoutBinding::default()
         .binding(5)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .descriptor_count(1);
+    let skybox = vk::DescriptorSetLayoutBinding::default()
+        .binding(6)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1);
@@ -141,6 +138,7 @@ pub unsafe fn create_render_compute_pipeline(
         svt_meta_image,
         svo_bitmasks,
         svo_indices,
+        svo_aabbs,
         lights_buffer,
         skybox
     ];
@@ -174,8 +172,7 @@ pub unsafe fn create_sky_pipeline(
     device: &ash::Device,
     binder: &Option<ash::ext::debug_utils::Device>,
 ) -> SkyPipeline {
-    let shader_module = create_shader_module(raw, device);
-    crate::debug::set_object_name(shader_module, binder, "sky compute shader module");
+    let shader_module = create_shader_module(raw, device, binder, "sky compute shader module");
 
     let skybox = vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -212,15 +209,18 @@ pub unsafe fn create_sky_pipeline(
     }
 }
 
-unsafe fn create_shader_module(raw: &[u32], device: &ash::Device) -> vk::ShaderModule {
-    let render_compute_shader_module_create_info = vk::ShaderModuleCreateInfo::default()
+unsafe fn create_shader_module(raw: &[u32], device: &ash::Device, binder: &Option<ash::ext::debug_utils::Device>, name: &str) -> vk::ShaderModule {
+    log::debug!("creating shader shader module '{name}'");
+    let shader_module_create_info = vk::ShaderModuleCreateInfo::default()
         .code(raw)
         .flags(vk::ShaderModuleCreateFlags::empty());
 
-    let render_compute_shader_module = device
-        .create_shader_module(&render_compute_shader_module_create_info, None)
+    let shader_module = device
+        .create_shader_module(&shader_module_create_info, None)
         .unwrap();
-    render_compute_shader_module
+    crate::debug::set_object_name(shader_module, binder, name);
+    log::debug!("created shader shader module '{name}'");
+    shader_module
 }
 
 /*

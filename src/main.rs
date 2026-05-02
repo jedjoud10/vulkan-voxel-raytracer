@@ -142,6 +142,10 @@ impl ConstantDescriptorSets {
             .buffer(svo.index_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
+        let descriptor_svo_aabbs_info = vk::DescriptorBufferInfo::default()
+            .buffer(svo.aabb_buffer.buffer)
+            .offset(0)
+            .range(u64::MAX);
         let descriptor_light_buffer_info = vk::DescriptorBufferInfo::default()
             .buffer(lights_buffer.buffer)
             .offset(0)
@@ -152,7 +156,7 @@ impl ConstantDescriptorSets {
             .image_layout(vk::ImageLayout::GENERAL);
  
         let descriptor_svt_image_infos = [descriptor_svt_image_info, descriptor_svt_metadata_image_info];
-        let descriptor_svo_buffers_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info, descriptor_light_buffer_info];
+        let descriptor_svo_buffers_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info, descriptor_svo_aabbs_info, descriptor_light_buffer_info];
         let descriptor_skybox_combined_image_sampler_infos = [descriptor_skybox_image_info];
 
         let render_compute_svt_images_descriptor_write = vk::WriteDescriptorSet::default()
@@ -170,7 +174,7 @@ impl ConstantDescriptorSets {
         let render_compute_skybox_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_skybox_combined_image_sampler_infos.len() as u32)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .dst_binding(5)
+            .dst_binding(6)
             .dst_set(render_compute_pipeline_descriptor_set)
             .image_info(&descriptor_skybox_combined_image_sampler_infos);
         

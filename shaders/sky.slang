@@ -209,8 +209,7 @@ struct CloudsResult {
 
 // umm.. what the sigma
 CloudsResult clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos) {
-    return CloudsResult(0, 1);
-    /*
+
     float opacity = 0.0;
 
     if (let pos = ray_plane_intersect(ray_dir, ray_pos, 800)) {
@@ -231,7 +230,6 @@ CloudsResult clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos) {
     opacity = clamp(opacity, 0, 1);
 
     return CloudsResult(opacity, 1);
-    */
 }
 
 
@@ -247,7 +245,6 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
 
     float3 res = scatter(ray_start, ray_dir, normalize(sun_dir), planet.x) * 4 * dayTime;
 
-    /*
     if (extraLightEnabled) {
         float sunSpot = max(dot(ray_dir, sun_dir), 0.0);
         float sunMask = pow(sunSpot, 64.0) * dayTime;
@@ -265,9 +262,7 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
     if (clouds_enabled) {
         clouds_res = clouds(sun_dir, ray_dir, ray_pos);
     }
-    return lerp(res, clouds_res.colour, clouds_res.opacity);
-    */
-    return res;
+    return lerp(res, clouds_res.colour * (res + 0.5), clouds_res.opacity);
 }
 
 

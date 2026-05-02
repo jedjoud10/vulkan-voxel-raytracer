@@ -2,6 +2,7 @@ use std::{collections::VecDeque, ops::ControlFlow, time::Instant};
 use crate::utils::*;
 use ash::vk;
 use bit_vec::BitVec;
+use bytemuck::{Pod, Zeroable};
 use gpu_allocator::vulkan::Allocator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::buffer::{self, Buffer};
@@ -11,16 +12,18 @@ use super::{SVO_DEPTH, TOTAL_SIZE, BOTTOM_NODE, FULL_NODE};
 pub struct SparseVoxelOctree {
     pub bitmask_buffer: Buffer,
     pub index_buffer: Buffer,
+    pub aabb_buffer: Buffer,
     pub nodes: Vec<FlatNode>,
 }
 
 impl SparseVoxelOctree {
     // TODO: impl
     pub fn register_chunk(&mut self, chunk_position: vek::Vec3<u32>, chunk: BitVec) {
+        log::debug!("registering chunk {chunk_position}");
+        /*
         let full = chunk.all();
         let empty = chunk.any();
 
-        /*
         const CHUNK_64_HEIGHT: u32 = 3;
 
         let mut tmp_nodes = Vec::<FlatNode>::new();
@@ -30,8 +33,8 @@ impl SparseVoxelOctree {
         let mut all_mip = chunk;
         for pass in 0..3 {
             let mip_size = 64 / (1 << ((1+pass)*2));
-            let next_any_mip = BitSet::with_capacity((mip_size as usize).pow(3));
-            let next_all_mip = BitSet::with_capacity((mip_size as usize).pow(3));
+            let mut next_any_mip = BitVec::from_fn((mip_size as usize).pow(3), |_| false);
+            let mut next_all_mip = BitVec::from_fn((mip_size as usize).pow(3), |_| false);
 
             for x in 0..mip_size {
                 for y in 0..mip_size {
@@ -53,31 +56,28 @@ impl SparseVoxelOctree {
                         }
 
                         let i = (x + y * 4 + z * 4 * 4) as usize; 
-                        next_any_mip.get_mut().set();
+                        next_any_mip.set(i, any);
+                        next_all_mip.set(i, all);
+
                     }
                 }
             }
+
+            any_mip = next_any_mip;
+            all_mip = next_all_mip; 
         }
-        
 
-        
-        let prefire_callback = |nodes: &mut Vec<FlatNode>, node: &TopDownTraversalNode, child_index_relative: u32| -> ControlFlow<(), ()> {
-            ControlFlow::Continue(())
-        };
-
-        let postfire_callback = |nodes: &mut Vec<FlatNode>, node: &TopDownTraversalNode, child_index_absolute: usize, child_index_relative: u32| -> ControlFlow<(), ()> {
-            if node.height == CHUNK_64_HEIGHT {
-            
-                let chunk_node = &mut nodes[child_index_absolute as usize];
-                // do the funny moment stuff here...
-            
-            }
-
-            ControlFlow::Continue(())
-        };
-
-        self.traverse(chunk_position, CHUNK_64_HEIGHT-1, prefire_callback, postfire_callback);
         */
+        
+
+        // holy fucking cursed but works for protyping
+        for i in 0..(64*64*64) {
+            let pos = crate::voxel::util::index_to_offset(i, 64);
+
+            if chunk.get(i).unwrap() {
+                self.set(pos.as_::<u32>() + chunk_position * 64, true);
+            }
+        }
     }
 
     fn traverse<A: FnMut(&mut Vec<FlatNode>, &TopDownTraversalNode, u32) -> ControlFlow<(), ()>, B: FnMut(&mut Vec<FlatNode>, &TopDownTraversalNode, usize, u32) -> ControlFlow<(), ()>>(&mut self, pos: vek::Vec3<u32>, target_height: u32, mut prefire_callback: A, mut postfire_callback: B) {
@@ -99,17 +99,31 @@ impl SparseVoxelOctree {
 
             let child_index_relative = x + y * 4 + z * 4 * 4;
 
+            self.nodes[node.index].bounds.expand_to_contain(vek::Aabb {
+                min: pos,
+                max: pos+1,
+            });
+
+
             let r = prefire_callback(&mut self.nodes, &node, child_index_relative);
             if r.is_break() {
                 break;
             }
 
             let child_index_absolute = if let Some(idx) = self.nodes[node.index].children.as_mut().unwrap()[child_index_relative as usize] {
+                self.nodes[idx].bounds.expand_to_contain(vek::Aabb {
+                    min: pos,
+                    max: pos+1,
+                });
                 idx
             } else {
                 self.nodes.push(FlatNode {
                     children: None,
                     full: false,
+                    bounds: vek::Aabb {
+                        min: pos,
+                        max: pos+1,
+                    },
                 });
                 let idx = self.nodes.len()-1;
                 self.nodes[node.index].children.as_mut().unwrap()[child_index_relative as usize] = Some(idx);
@@ -157,6 +171,7 @@ impl SparseVoxelOctree {
                         nodes.push(FlatNode {
                             children: None,
                             full: true,
+                            bounds: vek::Aabb::new_empty(vek::Vec3::zero())
                         });
                         let idx = nodes.len()-1;
                         nodes[node.index].children.as_mut().unwrap()[i] = Some(idx);
@@ -217,18 +232,21 @@ impl SparseVoxelOctree {
     // unfortunately, as the AS is using packed buffer and packed nodes, *adding* a new node will require you to shift all nodes after that
     // depending on the child indexing order, this could be very cheap (i.e inserting near the end) or very expensive (i.e inserting near the front and having to shift all elements after that)
     pub unsafe fn rebuild(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, mut allocator: &mut Allocator) {
-        let (bitmasks, indices) = super::convert_to_buffers(&self.nodes);
+        let (bitmasks, indices, aabbs) = super::convert_to_buffers(&self.nodes);
         let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(bitmasks.as_slice());
         let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(indices.as_slice());
+        let aabb_buffer_bytes = bytemuck::cast_slice::<_, u8>(aabbs.as_slice());
 
         // TODO: use the dedicated per-frame command buffer and a scratch buffer and avoid doing the device.wait_idle() inside these calls
         buffer::write_to_buffer(device, pool, queue, self.bitmask_buffer.buffer, &mut allocator, bitmasks_buffer_bytes);
         buffer::write_to_buffer(device, pool, queue, self.index_buffer.buffer, &mut allocator, indices_buffer_bytes);
+        buffer::write_to_buffer(device, pool, queue, self.aabb_buffer.buffer, &mut allocator, aabb_buffer_bytes);
     }
 
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
         self.bitmask_buffer.destroy(device, allocator);
         self.index_buffer.destroy(device, allocator);
+        self.aabb_buffer.destroy(device, allocator);
     }
 }
 
@@ -240,8 +258,15 @@ struct TopDownTraversalNode {
 
 // TODO: optimize space using NonZero and bitmasks for bottom&full
 pub struct FlatNode {
+    pub bounds: vek::Aabb<u32>,
     pub children: Option<Box<[Option<usize>; 64]>>,
     pub full: bool,
+}
+
+impl FlatNode {
+    pub fn root() -> Self {
+        Self { children: None, full: false, bounds: vek::Aabb::new_empty(vek::Vec3::zero()) }
+    }
 }
 
 struct BottomUpPath {
@@ -258,17 +283,27 @@ struct TraversalNode<'a> {
     self_packed_child_offset: usize,
 }
 
-pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
+#[derive(Clone, Copy, Zeroable, Pod)]
+#[repr(C)]
+pub struct GpuAabbBounds {
+    min: vek::Vec4<u32>,
+    max: vek::Vec4<u32>,
+}
+
+pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAabbBounds>) {
     let start = Instant::now();
     let mut queue = VecDeque::<TraversalNode>::new();
     queue.push_back(TraversalNode { node: &nodes[0], height: SVO_DEPTH, parent_base_child_index: None, self_packed_child_offset: 0 });
 
     let mut bitmask_vec = Vec::<u64>::new();
+    let mut num_bits_set_total = 0u128;
     let mut index_vec = Vec::<u32>::new();
+    let mut aabb_vec = Vec::<GpuAabbBounds>::new();
     let mut nodes_visited = 0;
     let mut test_count = 0u32;
     let mut base_indices_for_height = vec![0u32; SVO_DEPTH as usize + 1];
 
+    // first pass that will create the index vec and bitmask vec
     while let Some(TraversalNode { node, height, parent_base_child_index: parent_index, self_packed_child_offset  }) = queue.pop_front() {
         let self_index = index_vec.len();
         base_indices_for_height[height as usize] += 1;
@@ -286,6 +321,10 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
         ).unwrap_or_default();
         
         let mut base_child_index = test_count + 1;
+        
+        // metrics stuff...
+        num_bits_set_total += bitmask.count_ones() as u128;
+
 
         // check if we are handling the base case
         if height == 0 {
@@ -317,6 +356,9 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
 
         bitmask_vec.push(bitmask);
         index_vec.push(base_child_index);
+
+        //aabb_vec.push(GpuAabbBounds { min: vek::Vec4::from_point(0), max: vek::Vec4::from_point(vek::Vec3::broadcast(1024)) });
+        aabb_vec.push(GpuAabbBounds { min: vek::Vec4::from_point(node.bounds.min), max: vek::Vec4::from_point(node.bounds.max) });
         nodes_visited += 1;
     }
 
@@ -351,8 +393,14 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>) {
     
     let end = Instant::now();
     log::debug!(" - time taken: {}ms", (end-start).as_millis());
+    log::debug!(" - num bits set per node: {}bits/node on avg", num_bits_set_total as f64 / nodes_visited as f64);
 
-    (bitmask_vec, index_vec)
+    for k in aabb_vec.iter().take(32) {
+        log::debug!("min:{}, max:{}", k.min, k.max);
+    }
+    
+
+    (bitmask_vec, index_vec, aabb_vec)
 }
 
 

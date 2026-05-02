@@ -1,6 +1,7 @@
 use std::{ffi::CString, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
+use noise::NoiseFn;
 use crate::{buffer::{self}};
 
 mod recursive;
@@ -14,6 +15,11 @@ pub use util::{TOTAL_SIZE};
 
 pub use sparse::SparseVoxelOctree;
 
+struct Chunk {
+    pos: vek::Vec3<u32>,
+    data: bit_vec::BitVec,
+}
+
 pub unsafe fn create_sparse_structures(
     device: &ash::Device,
     mut allocator: &mut Allocator,
@@ -26,10 +32,52 @@ pub unsafe fn create_sparse_structures(
     // another buffer stores the "children base" index references as u16s
     // it contains a bitmask of its children
     log::debug!("creating SVO...");
-    let max_svo_element_size = 4096 * 64 * 4;
+    let max_svo_element_size = 4096 * 64 * 16;
+    let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<GpuAabbBounds>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-    let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, nodes: convert_recursive_to_flat_map(create_recursive_structure()) };
+    //let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, nodes: convert_recursive_to_flat_map(create_recursive_structure()) };
+    let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, aabb_buffer, nodes: vec![FlatNode::root()] };
+
+    let mut fbm = noise::Fbm::<noise::Perlin>::new(0); 
+    fbm.frequency = 0.001;
+    let fbm_borrow = &fbm;
+    
+    let (tx, rx) = std::sync::mpsc::channel::<Chunk>();
+    let tx_borrow = &tx;
+    
+    let chunks = std::thread::scope(|scope| {
+        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(2);
+
+        for x in 0..num_chunks {
+            for y in 0..3 {
+                for z in 0..num_chunks {
+                    scope.spawn(move || {
+                    let chunk_position = vek::Vec3::new(x, y, z);
+                    let chunk = bit_vec::BitVec::from_fn(64*64*64, |index| {
+                        let local_position = util::index_to_offset(index, 64);
+                        let world_position = local_position + chunk_position * 64;
+                        let pos = world_position.as_::<f64>();
+                        pos.y < fbm_borrow.get([pos.x, pos.z]) * 300.0f64 + 80.0f64
+                    });
+                
+                    tx_borrow.send(Chunk {
+                        pos: chunk_position.as_::<u32>(),
+                        data: chunk,
+                    }).unwrap();
+                    log::info!("sent chunk {chunk_position}");
+                    });
+                }
+            }
+        }
+
+        rx.into_iter().take(num_chunks*3*num_chunks).collect::<Vec<_>>()
+    });
+
+    for chunk in chunks {
+        svo.register_chunk(chunk.pos, chunk.data);
+    }
+
 
     /*
     for i in 0..50000 {
@@ -40,6 +88,11 @@ pub unsafe fn create_sparse_structures(
         svo.set(vek::Vec3::new(x,y,z), true);
     }
     */
+
+    //svo.set(vek::Vec3::new(1,4,5), true);
+
+    //svo.set(vek::Vec3::new(1,9,5), true);
+
 
     svo.rebuild(device, pool, queue, allocator);
     log::info!("created & updated sparse voxel tree buffers");

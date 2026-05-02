@@ -7,13 +7,11 @@ const REQUIRED_INSTANCE_EXTENSIONS: &'static [&'static CStr] =
     &[
         #[cfg(debug_assertions)]
         ash::ext::debug_utils::NAME,
-        #[cfg(debug_assertions)]
         ash::ext::validation_features::NAME,
         ash::khr::surface::NAME,
     ];
 
 const REQUIRED_INSTANCE_VALIDATION_LAYERS: &'static [&'static CStr] = &[
-    #[cfg(debug_assertions)]
     c"VK_LAYER_KHRONOS_validation",
 ];
 

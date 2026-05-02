@@ -194,7 +194,7 @@ pub fn convert_recursive_to_flat_map(node: RecursiveNode) -> Vec<FlatNode> {
     queue.push_back(ConvertTraversalNode { node: &node, parent_index: usize::MAX, child_index_relative: 0 });
 
     while let Some(ConvertTraversalNode { node, parent_index, child_index_relative }) = queue.pop_front() {
-        map.push(FlatNode { children: None, full: node.full });
+        map.push(FlatNode { children: None, full: node.full, bounds: todo!() });
         let index = map.len() - 1;
 
         if parent_index != usize::MAX {

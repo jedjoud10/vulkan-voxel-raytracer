@@ -20,9 +20,12 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
 [[vk::binding(4, 1)]]
-StructuredBuffer<float4> lights_buffer;
+StructuredBuffer<GpuAabb> svo_aabbs_buffer;
 
 [[vk::binding(5, 1)]]
+StructuredBuffer<float4> lights_buffer;
+
+[[vk::binding(6, 1)]]
 SamplerCube<float4> skybox;
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
@@ -63,7 +66,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
     float3 ray_dir = normalize((mul(mat, float4(screen_uvs, 1, 0))).xyz);
     float3 ray_pos = position.xyz;
     
-    SparseVoxelOctree svo = SparseVoxelOctree(svo_indices_buffer, svo_bitmasks_buffer);
+    SparseVoxelOctree svo = SparseVoxelOctree(svo_indices_buffer, svo_bitmasks_buffer, svo_aabbs_buffer);
     Statistics stats = Statistics(0, 0);
     
     float3 iterative_ray_dir = ray_dir;
@@ -115,7 +118,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             }
 
             // pick random special mirror block
-            if (block_pos.y > TOTAL_SIZE / 2) {
+            if (block_pos.y > 4) {
                 special = hash13(floor(block_pos / 8));
             }
 
@@ -335,8 +338,8 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4((nth_world % 16) / 16, 0);
             break;
         case DebugType::ExitType:
-            output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);
-            //output[id.xy] = float4(stats.exit_type / 3.0);
+            //output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);
+            output[id.xy] = float4(stats.exit_type / 3.0);
             break;
         default:
             break;

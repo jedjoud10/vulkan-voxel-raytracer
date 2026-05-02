@@ -1,3 +1,5 @@
+use std::ffi::CStr;
+
 use ash::vk;
 
 use crate::queue;
@@ -23,7 +25,9 @@ pub unsafe fn create_device_and_queue(
     let queue_create_infos = [queue_create_info];
 
     let mut compute_derivatives = vk::PhysicalDeviceComputeShaderDerivativesFeaturesNV::default()
-        .compute_derivative_group_quads(true); 
+        .compute_derivative_group_quads(true)
+        .compute_derivative_group_linear(true);
+     
     let mut shader_clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default()
         .shader_device_clock(true)
         .shader_subgroup_clock(true); 
@@ -48,6 +52,9 @@ pub unsafe fn create_device_and_queue(
         ash::khr::shader_atomic_int64::NAME,
         ash::khr::shader_clock::NAME,
         ash::ext::shader_image_atomic_int64::NAME,
+
+        // TODO: remove when ash vk1.4
+        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_compute_shader_derivatives\0") },
     ];
 
     let device_extension_names_ptrs = device_extension_names

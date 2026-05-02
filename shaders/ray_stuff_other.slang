@@ -1,9 +1,15 @@
 #include <other.slang>
 #include <noises.slang>
 
+struct GpuAabb {
+    uint32_t4 min;
+    uint32_t4 max;
+}
+
 struct SparseVoxelOctree {
     StructuredBuffer<uint32_t> indices_buffer;
     StructuredBuffer<uint64_t> bitmasks_buffer;
+    StructuredBuffer<GpuAabb> aabbs_buffer;
 }
 
 struct Statistics {
@@ -78,6 +84,7 @@ struct DdaTraversalOutput {
 DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANCE : int>(
     uint32_t base_index,
     uint64_t raw,
+    GpuAabb bounds,
     float3 ray_dir,
     float3 ray_pos,
     float3 inv_dir,
@@ -88,6 +95,10 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     uint8_t face,
     inout Statistics stats,
 ) {
+    if (!ray_box_intersection2(inv_dir, dir_sign, ray_pos, bounds.min.xyz, bounds.max.xyz)) {
+        return DdaTraversalOutput(false);
+    }
+
     /*
     if (WaveActiveCountBits(true) < 16) {
         return DdaTraversalOutput(false);
@@ -109,6 +120,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     float3 side_dist = ((dir_sign * ((floored_pos - modified_ray_pos) + 0.5) + 0.5) * inv_dir);
     bool3 eqs = false;    
     
+    
     for (uint8_t i = 0; i < 12; i++) {
         stats.iterations += 1;
         /*
@@ -125,8 +137,10 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
         uint16_t3 origin = parent_world_space_origin + floored_pos * voxel_size;
 
         stats.calls += 1;
-        stats.active_threads_per_call += WaveActiveCountBits(base_index == FULL_NODE || (((raw >> bit_index) & 1) == 1));
+        stats.active_threads_per_call += WaveActiveCountBits((((raw >> bit_index) & 1) == 1));
         
+
+
         [branch]
         if ((((raw >> bit_index) & 1) == 1)) {  
             // still need an offset though, for the normals :(((
@@ -135,7 +149,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
 
             // check if we have reached the bottom most node and exit if so
             [branch]
-            if (K > 0 && base_index != BOTTOM_NODE) {
+            if (K > 0) {
                 // calculate child offset index, which is NOT the same as the bit index
                 // we need to count the number of ones that come before (excluding) `bit_index` in `raw` 
                 // create a mask for the first `n` bits
@@ -163,25 +177,12 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
                     return DdaTraversalOutput(true, world, block_pos, tmin, face);
                 }
 
-                // TODO:
-                // ANOTHER POSSIBLE OPTIMIZATION: have a separate "5-bvh" mode for nodes if we can construct proper bvhs for them during traversal
-                // for super flat / planar nodes, this should work in our favour because it could represent the entire brick node (u64) in wayyy less memory
-                // assuming AABB bounds are quantized (2 bits per axii, since we use the range 0..4), a single AABB would take 2*3 * 2 = 12 bits
-                // we can store 5 BVHs in one u64, but we can do better than; we can store them separately in their own buffer
-                //    this way, if we have < 5 BVHs for the node, we don't need to fetch 64 whole bits!
-                // each BVH would need to store data to its children nodes though... fuck
-                // ok solution: each BVH node also contains a COUNT and CHILD OFFSET. since we can have up to 64 children in a single node, both these values must be represented by 6 bits
-                // we can order the children in `svo.indices_buffer` and `svo.bitmasks_buffer` to our own liking afterwards, they don't need to follow the z-y-x bitmask DDA order
-                // each BVH thing would then need 2*3 * 2 + 6 + 6 = 24 bits fuck.... WAIT IM FUCKING STUPID CHILD COUNT IS THE VOLUME OF THE BVH ITSELF
-                // bruh
-                // ok 6 bits removed, down to 18... we just need... to get rid of 2 more bits........ argh.....
-                // easiest solution is to use less bits for the offset. that would limit the number of bhv nodes in total if we have a bunch of ones that only use a few nodes but should be fine
-                // 2*3*2 + 4 = 16 bits YAY!!!!!!
-                // we can then do a different intersection test using those BVH nodes instead, should be cheaper than traversing a nearly empty DDA cell 
                 uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
                 stats.buffer_fetches += 1;
 
-                var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
+                
+                GpuAabb bounds = svo.aabbs_buffer[actual_child_index];  
+                var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, bounds, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
                 if (result.hit) {
                     return result;
                 }
@@ -362,7 +363,7 @@ DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
 
     float3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, svo.bitmasks_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, 0, iter);
+    return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, svo.bitmasks_buffer[0], svo.aabbs_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, 0, iter);
 }
 
 
