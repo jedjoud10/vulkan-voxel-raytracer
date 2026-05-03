@@ -167,7 +167,6 @@ pub unsafe fn write_to_buffer(
 }
 
 pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Allocator, bytes: &[u8]) -> (vk::Buffer, Allocation) {
-    // staging buffer impl
     let staging_buffer_create_info = vk::BufferCreateInfo::default()
         .flags(vk::BufferCreateFlags::empty())
         .usage(vk::BufferUsageFlags::TRANSFER_SRC)
@@ -208,7 +207,7 @@ pub struct TemporaryStagingBuffer<'a> {
     pub allocator: &'a mut Allocator,
 }
 
-impl<'a> Drop for TemporaryStagingBuffer<'a> {
+impl<'a> TemporaryStagingBuffer<'a> {
     fn drop(&mut self) {
         unsafe {
             self.device.destroy_buffer(self.buffer, None);

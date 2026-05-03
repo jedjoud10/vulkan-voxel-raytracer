@@ -21,3 +21,14 @@ pub const OFFSETS: [vek::Vec3::<i32>; 6] = [
     vek::Vec3::new(0, 0, -1),
     vek::Vec3::new(0, 0, 1),
 ];
+
+
+#[macro_export]
+macro_rules! asset {
+    ($file:expr, $assets:expr) => {{
+        let bytes = include_bytes_aligned::include_bytes_aligned!(4, env!($file));
+        let words = bytemuck::cast_slice::<u8, u32>(bytes);
+        $assets.insert($file, words);
+        log::info!("loading embedded asset '{}' from compile time...", $file);
+    }};
+}

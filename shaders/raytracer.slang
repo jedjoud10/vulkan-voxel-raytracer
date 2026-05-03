@@ -314,12 +314,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 break;
             }
         } else {
-            /*
             float4 clouds_colour_opacity = clouds(sun.xyz, iterative_ray_dir, iterative_ray_pos, clouds_sampler);
             float3 sky_colour = skybox_sampler.Sample(iterative_ray_dir).xyz;
             float3 composed_sky_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
             color *= composed_sky_colour;
-            */
             //color *= skybox_sampler.Sample(iterative_ray_dir).xyz;
             //color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
             break;

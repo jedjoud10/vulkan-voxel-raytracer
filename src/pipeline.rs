@@ -190,15 +190,9 @@ pub unsafe fn create_sky_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
-    let clouds_sampler = vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1);
     let bindings = [
         skybox,
-        clouds,
-        clouds_sampler
+        clouds
     ];
 
     let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()

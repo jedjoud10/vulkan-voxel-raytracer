@@ -9,9 +9,6 @@ RWTexture2DArray<float4> skybox_image;
 [[vk::binding(1, 0)]]
 RWTexture2D<float4> clouds_image;
 
-[[vk::binding(2, 0)]]
-Sampler2D<float4> clouds_sampler;
-
 [SpecializationConstant] const uint SKYBOX_RESOLUTION = 32;
 [SpecializationConstant] const uint CLOUDS_RESOLUTION = 32;
 
@@ -82,13 +79,6 @@ void write_skybox(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
     float3 ray_dir = normalize(coords);
     ray_dir.xz = -ray_dir.xz;
     
-    // get sky colour
     float3 sky_colour = sky(sun, ray_dir, 0.0, false, true);
-
-    // do cloud plane intersection
-    float4 clouds_colour_opacity = clouds(sun, ray_dir, 0.0, clouds_sampler);
-
-    // store skybox colour
-    float3 output_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
-    skybox_image.Store(id, float4(output_colour, 0));
+    skybox_image.Store(id, float4(sky_colour, 0));
 }

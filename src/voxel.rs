@@ -49,10 +49,11 @@ pub unsafe fn create_sparse_structures(
     //let chunks = Vec::<Chunk>::new();
 
     let chunks = std::thread::scope(|scope| {
-        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(2);
+        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(16);
+        let vertical_chunks = 2;
 
         for x in 0..num_chunks {
-            for y in 0..3 {
+            for y in 0..vertical_chunks {
                 for z in 0..num_chunks {
                     scope.spawn(move || {
                     let chunk_position = vek::Vec3::new(x, y, z);
@@ -73,7 +74,7 @@ pub unsafe fn create_sparse_structures(
             }
         }
 
-        rx.into_iter().take(num_chunks*3*num_chunks).collect::<Vec<_>>()
+        rx.into_iter().take(num_chunks*vertical_chunks*num_chunks).collect::<Vec<_>>()
     });
 
     for chunk in chunks {

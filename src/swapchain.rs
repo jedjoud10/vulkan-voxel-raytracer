@@ -1,5 +1,4 @@
 use std::ffi::{CStr, CString};
-
 use ash::vk;
 
 pub const FRAMES_IN_FLIGHT: u32 = 2;

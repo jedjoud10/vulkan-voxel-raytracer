@@ -2,7 +2,7 @@ use std::ffi::CStr;
 
 use ash::vk;
 
-use crate::queue;
+use crate::others;
 
 pub unsafe fn create_device_and_queue(
     instance: &ash::Instance,
@@ -12,7 +12,7 @@ pub unsafe fn create_device_and_queue(
 ) -> (ash::Device, u32, vk::Queue) {
     let queue_family_properties =
         instance.get_physical_device_queue_family_properties(physical_device);
-    let queue_family_index = queue::find_appropriate_queue_family_index(
+    let queue_family_index = others::find_appropriate_queue_family_index(
         physical_device,
         queue_family_properties,
         &surface_loader,

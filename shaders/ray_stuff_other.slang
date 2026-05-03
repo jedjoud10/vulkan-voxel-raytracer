@@ -176,16 +176,21 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
 
                     return DdaTraversalOutput(true, world, block_pos, tmin, face);
                 }
-
-                uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-                stats.buffer_fetches += 1;
-
                 
                 GpuAabb bounds = svo.aabbs_buffer[actual_child_index];  
-                var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, bounds, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
-                if (result.hit) {
-                    return result;
+
+                // maybe by doing this... we can avoid the bitmask buffer fetch.... when we know that the ray will miss the node entirely?
+                if (ray_box_intersection2(inv_dir, dir_sign, ray_pos, bounds.min.xyz, bounds.max.xyz)) {
+                    uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
+                    stats.buffer_fetches += 1;
+                    
+                    
+                    var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, bounds, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
+                    if (result.hit) {
+                        return result;
+                    }
                 }
+                
             } else {
                 float3 world = ray_pos + ray_dir * (distance_to_surface - EPS);
                 stats.exit_type = 3;
