@@ -38,14 +38,14 @@ fn load_module(session: &Session, file_name: &str, compiled_shader_folder_path: 
     path.push(format!("{file_name}.spv"));
 
     let mut file = File::create(&path).unwrap();
-    file.write(shader_bytecode.as_slice()).unwrap();
+    file.write_all(shader_bytecode.as_slice()).unwrap();
     
     // also copy the file to the compiled shaders folder
     {
         let mut path = PathBuf::from(compiled_shader_folder_path);
         path.push(format!("{file_name}.spv"));
         let mut file = File::create(&path).unwrap();
-        file.write(shader_bytecode.as_slice()).unwrap();
+        file.write_all(shader_bytecode.as_slice()).unwrap();
     }    
 
     let path_str = path.to_str().unwrap();

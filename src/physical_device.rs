@@ -40,7 +40,6 @@ pub(super) unsafe fn get_physical_device_score(
 
     let physical_device_features_supported = 
         device_features_base.shader_int16 == 1 &&
-        device_features_base.shader_int16 == 1 &&
         device_features_12.storage_buffer8_bit_access == 1 &&
         device_features_12.shader_float16 == 1 &&
         device_features_12.shader_int8 == 1 &&

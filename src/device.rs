@@ -54,7 +54,7 @@ pub unsafe fn create_device_and_queue(
         ash::ext::shader_image_atomic_int64::NAME,
 
         // TODO: remove when ash vk1.4
-        unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_compute_shader_derivatives\0") },
+        c"VK_KHR_compute_shader_derivatives",
     ];
 
     let device_extension_names_ptrs = device_extension_names

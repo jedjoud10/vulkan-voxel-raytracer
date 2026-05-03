@@ -49,7 +49,7 @@ pub unsafe fn create_sparse_structures(
     //let chunks = Vec::<Chunk>::new();
 
     let chunks = std::thread::scope(|scope| {
-        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(16);
+        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(1);
         let vertical_chunks = 2;
 
         for x in 0..num_chunks {
