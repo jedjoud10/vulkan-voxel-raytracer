@@ -1,15 +1,10 @@
 #include <other.slang>
 #include <noises.slang>
 
-struct GpuAabb {
-    uint32_t4 min;
-    uint32_t4 max;
-}
-
 struct SparseVoxelOctree {
     StructuredBuffer<uint32_t> indices_buffer;
     StructuredBuffer<uint64_t> bitmasks_buffer;
-    StructuredBuffer<GpuAabb> aabbs_buffer;
+    StructuredBuffer<uint64_t> aabbs_buffer;
 }
 
 struct Statistics {
@@ -51,6 +46,33 @@ bool ray_box_intersection(
     return max(tmin, 0) <= tmax;
 }
 
+bool ray_box_intersection3(
+    float3 inv_dir,
+    int8_t3 dir_sign,
+    float3 ray_pos,
+    int16_t3 aabb_min,
+    int16_t3 aabb_max,
+    out float _tmin,
+    out int face,
+) {
+    float3 t1 = (aabb_min - ray_pos) * inv_dir * dir_sign;
+    float3 t2 = (aabb_max - ray_pos) * inv_dir * dir_sign;
+
+    float3 k1 = min(t1, t2);
+    float3 k2 = max(t1, t2);
+
+    float tmin = max3(k1.x, k1.y, k1.z);
+    float tmax = min3(k2.x, k2.y, k2.z);
+
+
+    _tmin = tmin;
+
+    bool3 eqs = max3(k1.x, k1.y, k1.z) == k1;
+    face = (uint8_t)firstbithigh(eqs.x | eqs.y << 1 | eqs.z << 2);
+
+    return max(tmin, 0) <= tmax;
+}
+
 bool ray_box_intersection2(
     float3 inv_dir,
     int8_t3 dir_sign,
@@ -70,6 +92,7 @@ bool ray_box_intersection2(
     return max(tmin, 0) <= tmax;
 }
 
+
 struct DdaTraversalOutput {
     bool hit;
     float3 world; // this is not entirely accurate as there can be floating point issues here and there. DO NOT TRUST THIS FOR EXACT RESULTS!!
@@ -83,8 +106,8 @@ struct DdaTraversalOutput {
 // 2. optimize raw speed, it is still relatively slow on my HW
 DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANCE : int>(
     uint32_t base_index,
-    uint64_t raw,
-    GpuAabb bounds,
+    uint32_t actual_child_index,
+    uint64_t bounds,
     float3 ray_dir,
     float3 ray_pos,
     float3 inv_dir,
@@ -95,9 +118,29 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     uint8_t face,
     inout Statistics stats,
 ) {
-    if (!ray_box_intersection2(inv_dir, dir_sign, ray_pos, bounds.min.xyz, bounds.max.xyz)) {
+    uint16_t3 aabb_min = (uint16_t3)uint64_t3(bounds & 0b1111111111, (bounds >> 10) & 0b1111111111, (bounds >> 20) & 0b1111111111);
+    uint16_t3 aabb_max = (uint16_t3)uint64_t3((bounds >> 30) & 0b1111111111, (bounds >> 40) & 0b1111111111, (bounds >> 50) & 0b1111111111);                     
+
+    float tmin = 0;
+    int face2 = 0;
+    if (ray_box_intersection3(inv_dir, dir_sign, ray_pos, aabb_min, aabb_max, tmin, face2)) {
+        // make sure we are dealing with leaf nodes and that they represent volume cuboids
+        if (K == 0 && ((bounds >> 60) & 1) == 1) {
+            float3 world = ray_pos + ray_dir * (tmin - EPS);
+            uint3 block_pos = floor(world);
+               
+            // apply "accurate" block pos since we know the bounds of the full node and input face
+            int3 tmp_sign = max(0, -dir_sign);
+            block_pos[face2] = aabb_max[face2] - 1;
+            stats.exit_type = 4;
+            return DdaTraversalOutput(true, world, block_pos, tmin, face2);
+        }
+    } else {
         return DdaTraversalOutput(false);
     }
+
+    uint64_t raw = svo.bitmasks_buffer[actual_child_index];
+    stats.buffer_fetches += 1;
 
     /*
     if (WaveActiveCountBits(true) < 16) {
@@ -162,6 +205,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
                 // this should allow us to use u16, even though we have an extra buffer fetch, but that one should be cheap because it is depth based (uses `K`, compiler should store that in scalar mem)
                 uint32_t actual_child_index = base_index + child_offset_index;
                 uint32_t new_base_index = svo.indices_buffer[actual_child_index];
+                stats.buffer_fetches += 1;
 
                 // check if we reached a full node and if we did, we must somehow calculate block position and world position accurately 
                 if (new_base_index == FULL_NODE || K <= END) {
@@ -177,18 +221,12 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
                     return DdaTraversalOutput(true, world, block_pos, tmin, face);
                 }
                 
-                GpuAabb bounds = svo.aabbs_buffer[actual_child_index];  
+                uint64_t bounds = svo.aabbs_buffer[actual_child_index];  
+                stats.buffer_fetches += 1;
 
-                // maybe by doing this... we can avoid the bitmask buffer fetch.... when we know that the ray will miss the node entirely?
-                if (ray_box_intersection2(inv_dir, dir_sign, ray_pos, bounds.min.xyz, bounds.max.xyz)) {
-                    uint64_t new_raw = svo.bitmasks_buffer[actual_child_index];
-                    stats.buffer_fetches += 1;
-                    
-                    
-                    var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, new_raw, bounds, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
-                    if (result.hit) {
-                        return result;
-                    }
+                var result = dda_trace_recurse<K - 1, END, MAX_DISTANCE>(new_base_index, actual_child_index, bounds, ray_dir, ray_pos, inv_dir, dir_sign, distance_to_surface, svo, origin, face, stats);
+                if (result.hit) {
+                    return result;
                 }
                 
             } else {
@@ -368,7 +406,7 @@ DdaTraversalOutput trace_shi<let MAX_DISTANCE: uint>(
 
     float3 inv_dir = 1.0 / abs(ray_dir);
     int8_t3 dir_sign = (int8_t3)sign(ray_dir);
-    return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, svo.bitmasks_buffer[0], svo.aabbs_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, 0, iter);
+    return dda_trace_recurse<DEPTH - 1, 0, MAX_DISTANCE>(1, 0, svo.aabbs_buffer[0], ray_dir, ray_pos, inv_dir, dir_sign, 0.0, svo, 0, 0, iter);
 }
 
 

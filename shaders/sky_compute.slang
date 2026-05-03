@@ -19,22 +19,36 @@ void write_clouds(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
     float3 sun = sun_and_time.xyz;
     float time = sun_and_time.w;
 
-    float2 pos = (uv - 0.5) * 1000;
+    float2 pos = (uv - 0.5) * 8000;
 
     float amplitude = 0.7;
     float scale = 2.3;
-    float value = 0;
+    float3 value = 0;
 
     for (int i = 0; i < 4; i++) {
-        value += snoise(pos * pow(scale, i) * 0.005 + time * 0.03) * pow(amplitude, i);
+        value += sdnoise(pos * pow(scale, i) * 0.0015 + time * 0.03) * pow(amplitude, i);
     }
 
     //value *= smoothstep(0, 1, snoise(pos * 0.0005) * 1.5 - 0.2);
 
-    value = value / max(length(pos)/200-1, 1);
+    // scale opacity by distance
+    float opacity = value.x;
+    float2 derivatives = value.yz;
 
-    float3 col = 1.0;
-    clouds_image[id.xy] = float4(col, clamp(value, 0, 1));
+    //opacity *= saturate(3000-length(pos));
+
+    float3 ray_dir = normalize(float3(pos.x, 800, pos.y));
+
+    float3 bottom_normals = normalize(float3(derivatives.x, -1, derivatives.y));
+    float3 top_normals = normalize(float3(-derivatives.x, 1, -derivatives.y));
+
+    
+    float3 col = saturate(dot(sun, top_normals));
+
+    int2 offset = (int2)((hash22(pos * 0.554684) * 2.0 - 1.0) * 1);
+    float4 old = clouds_image[(uint2)(id.xy+offset)];
+    AllMemoryBarrier();
+    clouds_image[id.xy] = lerp(float4(col, clamp(opacity, 0, 1)), old, 0.95);
 }
 
 [shader("compute")]

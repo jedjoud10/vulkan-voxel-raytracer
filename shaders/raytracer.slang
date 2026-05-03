@@ -20,7 +20,7 @@ StructuredBuffer<uint64_t> svo_bitmasks_buffer;
 StructuredBuffer<uint32_t> svo_indices_buffer;
 
 [[vk::binding(4, 1)]]
-StructuredBuffer<GpuAabb> svo_aabbs_buffer;
+StructuredBuffer<uint64_t> svo_aabbs_buffer;
 
 [[vk::binding(5, 1)]]
 StructuredBuffer<float4> lights_buffer;
@@ -347,7 +347,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             break;
         case DebugType::ExitType:
             //output[id.xy] = float4(heatmap(1 - (stats.active_threads_per_call / stats.calls) / 64.0), 0);
-            output[id.xy] = float4(stats.exit_type / 3.0);
+            output[id.xy] = float4(stats.exit_type / 4.0);
             break;
         default:
             break;

@@ -33,7 +33,7 @@ pub unsafe fn create_sparse_structures(
     // it contains a bitmask of its children
     log::debug!("creating SVO...");
     let max_svo_element_size = 4096 * 64 * 16;
-    let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<GpuAabbBounds>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+    let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     //let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, nodes: convert_recursive_to_flat_map(create_recursive_structure()) };
@@ -49,7 +49,7 @@ pub unsafe fn create_sparse_structures(
     //let chunks = Vec::<Chunk>::new();
 
     let chunks = std::thread::scope(|scope| {
-        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(1);
+        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(8);
         let vertical_chunks = 2;
 
         for x in 0..num_chunks {
@@ -61,7 +61,11 @@ pub unsafe fn create_sparse_structures(
                         let local_position = util::index_to_offset(index, 64);
                         let world_position = local_position + chunk_position * 64;
                         let pos = world_position.as_::<f64>();
-                        pos.y < fbm_borrow.get([pos.x, pos.z]) * 300.0f64 + 80.0f64
+
+                        let height = fbm_borrow.get([pos.x, pos.z]) * 300.0f64 + 80.0f64;
+                        let height = (height / 10f64).floor() * 10f64;
+
+                        pos.y < height
                     });
                 
                     tx_borrow.send(Chunk {

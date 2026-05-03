@@ -46,14 +46,13 @@ pub unsafe fn create_skybox(
     queue_family_index: u32,
 ) -> Skybox {
     let filter = vk::Filter::NEAREST;
-    let resolution = SKYBOX_RESOLUTION;
     let queue_family_indices = [queue_family_index];
     let format = vk::Format::R32G32B32A32_SFLOAT;
 
     let skybox_image_create_info = vk::ImageCreateInfo::default()
         .extent(vk::Extent3D {
-            width: resolution,
-            height: resolution,
+            width: SKYBOX_RESOLUTION,
+            height: SKYBOX_RESOLUTION,
             depth: 1,
         })
         .format(format)
@@ -84,8 +83,8 @@ pub unsafe fn create_skybox(
     
     let clouds_image_create_info = vk::ImageCreateInfo::default()
         .extent(vk::Extent3D {
-            width: resolution,
-            height: resolution,
+            width: CLOUDS_RESOLUTION,
+            height: CLOUDS_RESOLUTION,
             depth: 1,
         })
         .format(format)

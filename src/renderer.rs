@@ -279,7 +279,7 @@ impl InternalApp {
 
         for i in 0..10 {
             let x = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
-            let y = rand::random_range(500f32..(voxel::TOTAL_SIZE as f32));
+            let y = rand::random_range(0f32..(voxel::TOTAL_SIZE as f32));
             let z = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
             lights.push(vek::Vec4::new(x,y,z, 1.0));
         }
@@ -287,7 +287,7 @@ impl InternalApp {
         buffer::write_to_buffer(&device, pool, queue, lights_buffer.buffer, &mut allocator, bytemuck::cast_slice(lights.as_slice()));
         log::info!("created lights buffer");
 
-        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, pool, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
+        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
         log::info!("created constant descriptor sets");
 
         let query_pool = others::create_query_pool(&device);

@@ -289,14 +289,18 @@ struct TraversalNode<'a> {
     self_packed_child_offset: usize,
 }
 
-#[derive(Clone, Copy, Zeroable, Pod)]
-#[repr(C)]
-pub struct GpuAabbBounds {
-    min: vek::Vec4<u32>,
-    max: vek::Vec4<u32>,
+fn pack_aabb_bounds(vek::Aabb { min, max }: vek::Aabb<u32>, represents_cuboid: bool) -> u64 {
+    let min = (min.x | min.y << 10 | min.z << 20) as u64;
+    let max = (max.x | max.y << 10 | max.z << 20) as u64;
+    let mut flags = 0u64;
+    
+    crate::utils::set_bit(&mut flags, 0, represents_cuboid);
+    
+    debug_assert_eq!(flags & 0b1111, flags);
+    min | max << 30 | flags << 60
 }
 
-pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAabbBounds>) {
+pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<u64>) {
     let start = Instant::now();
     let mut queue = VecDeque::<TraversalNode>::new();
     queue.push_back(TraversalNode { node: &nodes[0], height: SVO_DEPTH, parent_base_child_index: None, self_packed_child_offset: 0 });
@@ -304,7 +308,11 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAab
     let mut bitmask_vec = Vec::<u64>::new();
     let mut num_bits_set_total = 0u128;
     let mut index_vec = Vec::<u32>::new();
-    let mut aabb_vec = Vec::<GpuAabbBounds>::new();
+    let mut aabb_vec = Vec::<u64>::new();
+    
+    let mut total_coarse_volume = 0f64;
+    let mut total_tight_aabb_volume = 0f64;
+    
     let mut nodes_visited = 0;
     let mut test_count = 0u32;
     let mut base_indices_for_height = vec![0u32; SVO_DEPTH as usize + 1];
@@ -327,10 +335,17 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAab
         ).unwrap_or_default();
         
         let mut base_child_index = test_count + 1;
-        
+
         // metrics stuff...
         num_bits_set_total += bitmask.count_ones() as u128;
+        total_coarse_volume += 2u32.pow(SVO_DEPTH * 2) as f64;
+        let size = node.bounds.max - node.bounds.min;
+        let tight_volume = size.x * size.y * size.z;
+        total_tight_aabb_volume += tight_volume as f64;
 
+        // we can avoid doing DDA for the bottom-most nodes if we KNOW that they represents cuboids
+        // since we already do a ray-AABB test to check for collision, we can use the result of that to get the hit output stuff and avoid doing DDA completely
+        let represents_cuboid = bitmask.count_ones() == tight_volume; // if number of set voxels is equal to AABB volume, then AABB volume is tight around a cuboid (this only holds correctly for the leaf nodes)
 
         // check if we are handling the base case
         if height == 0 {
@@ -362,9 +377,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAab
 
         bitmask_vec.push(bitmask);
         index_vec.push(base_child_index);
-
-        //aabb_vec.push(GpuAabbBounds { min: vek::Vec4::from_point(0), max: vek::Vec4::from_point(vek::Vec3::broadcast(1024)) });
-        aabb_vec.push(GpuAabbBounds { min: vek::Vec4::from_point(node.bounds.min), max: vek::Vec4::from_point(node.bounds.max) });
+        aabb_vec.push(pack_aabb_bounds(node.bounds, represents_cuboid));
         nodes_visited += 1;
     }
 
@@ -400,11 +413,13 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<GpuAab
     let end = Instant::now();
     log::debug!(" - time taken: {}ms", (end-start).as_millis());
     log::debug!(" - num bits set per node: {}bits/node on avg", num_bits_set_total as f64 / nodes_visited as f64);
+    log::debug!(" - tight volume / coarse volume: {}", total_tight_aabb_volume / total_coarse_volume);
 
+    /*
     for k in aabb_vec.iter().take(32) {
         log::debug!("min:{}, max:{}", k.min, k.max);
     }
-    
+    */
 
     (bitmask_vec, index_vec, aabb_vec)
 }

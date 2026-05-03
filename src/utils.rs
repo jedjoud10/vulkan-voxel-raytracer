@@ -13,6 +13,14 @@ pub fn is_set(bitmask: u64, index: u32) -> bool {
     ((bitmask >> index) & 1) == 1
 }
 
+pub fn set_bit(mask: &mut u64, index: u32, set: bool) {
+    if set {
+        *mask |= 1 << index;
+    } else{
+        *mask &= !(1 << index);
+    }
+}
+
 pub const OFFSETS: [vek::Vec3::<i32>; 6] = [
     vek::Vec3::new(-1, 0, 0),
     vek::Vec3::new(1, 0, 0),
