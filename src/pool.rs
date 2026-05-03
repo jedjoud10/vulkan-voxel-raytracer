@@ -8,7 +8,7 @@ pub unsafe fn create_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool
         .descriptor_count(30)
         .ty(vk::DescriptorType::STORAGE_BUFFER);
     let combined_image_samplers = vk::DescriptorPoolSize::default()
-        .descriptor_count(1)
+        .descriptor_count(5)
         .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER);
     let descriptor_pool_sizes = [images, buffers, combined_image_samplers];
 

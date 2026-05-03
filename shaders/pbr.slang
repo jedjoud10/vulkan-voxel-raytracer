@@ -65,7 +65,8 @@ public struct SunData {
 
 // Sky data struct
 public struct SkyData {
-	public SamplerCube skybox;
+	public SamplerCube skybox_image;
+	public Sampler2D clouds_image;
 };
 
 // Camera data struct
@@ -110,20 +111,24 @@ public float3 lighting(
 	// Diffuse Irradiance IBL
 	//float3 skyColor = sky(light.direction, float3(0, 0.8, 0), surface.position, false) + 0.1;
 	//float3 groundColor = sky(light.direction, float3(0, 0.05, 0), surface.position, false) + 0.05f;
-	float3 skyColor = sky.skybox.Sample(float3(0, 0.8, 0)).xyz + 0.1;
-	float3 groundColor = sky.skybox.Sample(float3(0, 0.05, 0)).xyz + 0.05f;
+	/*
+	float3 skyColor = sky.skybox_image.Sample(float3(0, 0.8, 0)).xyz + 0.1;
+	float3 groundColor = sky.skybox_image.Sample(float3(0, 0.05, 0)).xyz + 0.05f;
 	float3 irradiance = getEnvironmentDiffuse(surface.normal, skyColor, groundColor);
+	*/
 
 	//float3 irradiance = texture(samplerCube(ibl_diffuse_map, ibl_diffuse_map_sampler), surface.normal).xyz;
-	float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), surface.roughness, skyColor, groundColor);
+	//float3 environment_specular = getEnvironmentSpecular(reflect(camera.view, surface.normal), surface.roughness, skyColor, groundColor);
 	
 	// make the environment specular reflect the actual sky as the roughness decreases
-	float smoothness = 1-surface.roughness;
-	environment_specular = lerp(environment_specular, sky.skybox.Sample(-reflect(camera.view, surface.normal)).xyz, smoothstep(0.8, 1.0, smoothness));
+	//float smoothness = 1-surface.roughness;
+	//environment_specular = lerp(environment_specular, sky.skybox_image.Sample(-reflect(camera.view, surface.normal)).xyz, smoothstep(0.8, 1.0, smoothness));
 
 
 	//float environment_specular_fresnel_strength = pow(max(dot(reflect(camera.view, surface.normal), camera.view), 0), 4) * surface.sky_visibility;
-	float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility;
+	//float3 ambient = (irradiance * surface.albedo * kd + environment_specular) * surface.visibility;
+	float3 ambient = 0.2 * surface.albedo * kd * surface.visibility;
+	
 	// + float3(clamp(dot(reflect(camera.view, surface.normal), camera.view), 0, 1)) * 0.04
 	//return getEnvironmentSpecular(surface.normal, 0, skyColor, groundColor);
 

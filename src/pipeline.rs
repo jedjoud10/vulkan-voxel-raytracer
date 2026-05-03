@@ -62,7 +62,7 @@ impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeli
 }
 
 pub type RenderPipeline = MultiComputePipeline<1, 2>;
-pub type SkyPipeline = MultiComputePipeline<1, 1>;
+pub type SkyPipeline = MultiComputePipeline<2, 1>;
 
 #[derive(Pod, Zeroable, Copy, Clone)]
 #[repr(C)]
@@ -128,8 +128,13 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .descriptor_count(1);
-    let skybox = vk::DescriptorSetLayoutBinding::default()
+    let skybox_sampler = vk::DescriptorSetLayoutBinding::default()
         .binding(6)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1);
+    let clouds_sampler = vk::DescriptorSetLayoutBinding::default()
+        .binding(7)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1);
@@ -140,7 +145,8 @@ pub unsafe fn create_render_compute_pipeline(
         svo_indices,
         svo_aabbs,
         lights_buffer,
-        skybox
+        skybox_sampler,
+        clouds_sampler,
     ];
     let second_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::empty())
@@ -156,9 +162,9 @@ pub unsafe fn create_render_compute_pipeline(
 
     // FIXME: this assumes that spec constant fields are ALL u32s
     let spec_constant_bytes = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&constants));
-    let spec_constants = spec_constant_bytes.into_iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect();
+    let spec_constants = spec_constant_bytes.into_iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
 
-    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", &render_compute_descriptor_set_layouts, push_constant_size, Some(spec_constants));
+    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", &render_compute_descriptor_set_layouts, push_constant_size, Some(&spec_constants));
     
     return MultiComputePipeline {
         module: render_compute_shader_module,
@@ -179,8 +185,20 @@ pub unsafe fn create_sky_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
+    let clouds = vk::DescriptorSetLayoutBinding::default()
+        .binding(1)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let clouds_sampler = vk::DescriptorSetLayoutBinding::default()
+        .binding(2)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1);
     let bindings = [
-        skybox
+        skybox,
+        clouds,
+        clouds_sampler
     ];
 
     let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
@@ -196,16 +214,17 @@ pub unsafe fn create_sky_pipeline(
     let size = size_of::<SkyComputePushConstants>();
 
 
-    let spec_constant_fields = [crate::skybox::RESOLUTION];
+    let spec_constant_fields = [crate::skybox::SKYBOX_RESOLUTION, crate::skybox::CLOUDS_RESOLUTION];
     let spec_constants = spec_constant_fields.iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
 
 
-    let main_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "main", &render_compute_descriptor_set_layouts, Some(size), Some(spec_constants));
+    let clouds_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "write_clouds", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
+    let skybox_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "write_skybox", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
     
     return MultiComputePipeline {
         module: shader_module,
         descriptor_set_layout: render_compute_descriptor_set_layouts,
-        entry_points: [main_entry_point]
+        entry_points: [clouds_entry_point, skybox_entry_point],
     }
 }
 
@@ -316,7 +335,7 @@ pub unsafe fn create_single_entry_point_pipeline(
     entry_point_name: &str,
     descriptor_set_layouts: &[vk::DescriptorSetLayout],
     push_constant_size: Option<usize>,
-    spec_constants: Option<Vec<SpecConstant>>
+    spec_constants: Option<&[SpecConstant]>
 ) -> SingleEntryPointWrapper {
     let string = CString::from_str(entry_point_name).unwrap();
 

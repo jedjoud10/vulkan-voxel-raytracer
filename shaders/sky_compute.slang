@@ -1,15 +1,51 @@
 #language slang 2026
+
+#include "noises.slang"
 #include "sky.slang"
 
 [[vk::binding(0, 0)]]
-RWTexture2DArray<float4> skybox;
+RWTexture2DArray<float4> skybox_image;
 
-[SpecializationConstant] const uint RESOLUTION = 32;
+[[vk::binding(1, 0)]]
+RWTexture2D<float4> clouds_image;
+
+[[vk::binding(2, 0)]]
+Sampler2D<float4> clouds_sampler;
+
+[SpecializationConstant] const uint SKYBOX_RESOLUTION = 32;
+[SpecializationConstant] const uint CLOUDS_RESOLUTION = 32;
 
 [shader("compute")]
 [numthreads(32, 32, 1)]
-void main(uint3 id: SV_DispatchThreadID, uniform float4 sun) {
-    float2 uv = ((id.xy / (float)RESOLUTION) * 2.0 - 1.0);
+void write_clouds(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
+    float2 uv = id.xy / (float)CLOUDS_RESOLUTION;
+    float3 sun = sun_and_time.xyz;
+    float time = sun_and_time.w;
+
+    float2 pos = (uv - 0.5) * 1000;
+
+    float amplitude = 0.7;
+    float scale = 2.3;
+    float value = 0;
+
+    for (int i = 0; i < 4; i++) {
+        value += snoise(pos * pow(scale, i) * 0.005 + time * 0.03) * pow(amplitude, i);
+    }
+
+    //value *= smoothstep(0, 1, snoise(pos * 0.0005) * 1.5 - 0.2);
+
+    value = value / max(length(pos)/200-1, 1);
+
+    float3 col = 1.0;
+    clouds_image[id.xy] = float4(col, clamp(value, 0, 1));
+}
+
+[shader("compute")]
+[numthreads(32, 32, 1)]
+void write_skybox(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
+    float2 uv = ((id.xy / (float)SKYBOX_RESOLUTION) * 2.0 - 1.0);
+    float3 sun = sun_and_time.xyz;
+    float time = sun_and_time.w;
     
     float3 coords = 0;
 
@@ -46,6 +82,13 @@ void main(uint3 id: SV_DispatchThreadID, uniform float4 sun) {
     float3 ray_dir = normalize(coords);
     ray_dir.xz = -ray_dir.xz;
     
-    float3 col = sky(sun.xyz, ray_dir, 0, false, true);
-    skybox.Store(id, float4(col, 0));
+    // get sky colour
+    float3 sky_colour = sky(sun, ray_dir, 0.0, false, true);
+
+    // do cloud plane intersection
+    float4 clouds_colour_opacity = clouds(sun, ray_dir, 0.0, clouds_sampler);
+
+    // store skybox colour
+    float3 output_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
+    skybox_image.Store(id, float4(output_colour, 0));
 }

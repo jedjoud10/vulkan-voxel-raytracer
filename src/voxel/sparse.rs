@@ -20,6 +20,12 @@ impl SparseVoxelOctree {
     // TODO: impl
     pub fn register_chunk(&mut self, chunk_position: vek::Vec3<u32>, chunk: BitVec) {
         log::debug!("registering chunk {chunk_position}");
+
+        if !chunk.any() {
+            log::warn!("chunk was empty, ignoring");
+            return;
+        }
+
         /*
         let full = chunk.all();
         let empty = chunk.any();

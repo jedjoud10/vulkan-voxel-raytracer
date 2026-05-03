@@ -202,34 +202,12 @@ Optional<float2> ray_plane_intersect(float3 ray_dir, float3 ray_pos, float plane
     return none;
 }
 
-struct CloudsResult {
-    float opacity;
-    float3 colour;
-}
-
-// umm.. what the sigma
-CloudsResult clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos) {
-
-    float opacity = 0.0;
-
+float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
+    float4 clouds_colour_opacity = 0;
     if (let pos = ray_plane_intersect(ray_dir, ray_pos, 800)) {
-        //    opacity *= (snoise(pos * 0.01) * 0.5 + 0.5) * 2;
-        float amplitude = 0.5;
-        float scale = 2;
-        float value = 0;
-
-        for (int i = 0; i < 4; i++) {
-            value += snoise(pos * pow(scale, i) * 0.01) * pow(amplitude, i);
-        }
-
-        value *= smoothstep(0, 1, snoise(pos * 0.0005) * 1.5 - 0.2);
-
-        opacity = value / max(distance(ray_pos.xz, pos)/3000-1, 1);
+        clouds_colour_opacity = clouds_sampler.Sample(pos.xy / 8000 - 0.5);
     }
-
-    opacity = clamp(opacity, 0, 1);
-
-    return CloudsResult(opacity, 1);
+    return clouds_colour_opacity;
 }
 
 
@@ -257,12 +235,7 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
         res += starsIntensity * night;
     }
 
-    CloudsResult clouds_res = CloudsResult(0, 0);
-
-    if (clouds_enabled) {
-        clouds_res = clouds(sun_dir, ray_dir, ray_pos);
-    }
-    return lerp(res, clouds_res.colour * (res + 0.5), clouds_res.opacity);
+    return res;
 }
 
 

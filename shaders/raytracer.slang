@@ -26,7 +26,11 @@ StructuredBuffer<GpuAabb> svo_aabbs_buffer;
 StructuredBuffer<float4> lights_buffer;
 
 [[vk::binding(6, 1)]]
-SamplerCube<float4> skybox;
+SamplerCube<float4> skybox_sampler;
+
+[[vk::binding(7, 1)]]
+Sampler2D<float4> clouds_sampler;
+
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
 [SpecializationConstant] const uint MAX_ITERATIONS = 2;
@@ -234,11 +238,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         float d = 0;
                         float strength = pow(dot(dir, sun.xyz), 40);
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, shadow_ray_start).opacity))) / SHADOW_SAMPLES;
+                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, shadow_ray_start, clouds_sampler).a))) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
-                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start).opacity));
+                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start, clouds_sampler).a));
                 } else {
                     shadow = 1.0;
                 }
@@ -270,7 +274,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 // approximate sun color based on height
                 float3 sun_colour = sun_colour(sun.xyz);
                 SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (3.2 * sun_colour) : 0);
-                SkyData sky_data = SkyData(skybox);
+                SkyData sky_data = SkyData(skybox_sampler, clouds_sampler);
 
                 temp_color = lighting(pbr_surface_data, camera_data, sun_data, sky_data);
 
@@ -310,7 +314,13 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 break;
             }
         } else {
-            color *= skybox.Sample(iterative_ray_dir).xyz;
+            /*
+            float4 clouds_colour_opacity = clouds(sun.xyz, iterative_ray_dir, iterative_ray_pos, clouds_sampler);
+            float3 sky_colour = skybox_sampler.Sample(iterative_ray_dir).xyz;
+            float3 composed_sky_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
+            color *= composed_sky_colour;
+            */
+            //color *= skybox_sampler.Sample(iterative_ray_dir).xyz;
             //color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
             break;
         }

@@ -112,19 +112,36 @@ impl ConstantDescriptorSets {
         let render_compute_pipeline_descriptor_set= all_descriptor_sets[0];
         let sky_compute_pipeline_descriptor_set = all_descriptor_sets[1];
 
+        let descriptor_clouds_sampler_info = vk::DescriptorImageInfo::default()
+            .image_view(skybox.clouds_image_view)
+            .sampler(skybox.sampler)
+            .image_layout(vk::ImageLayout::GENERAL);
+
         let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
-            .image_view(skybox.array_image_view)
+            .image_view(skybox.skybox_array_image_view)
+            .sampler(vk::Sampler::null())
+            .image_layout(vk::ImageLayout::GENERAL);
+        let descriptor_clouds_image_info = vk::DescriptorImageInfo::default()
+            .image_view(skybox.clouds_image_view)
             .sampler(vk::Sampler::null())
             .image_layout(vk::ImageLayout::GENERAL);
 
-        let descriptor_image_infos = [descriptor_skybox_image_info];
+        let descriptor_image_infos_1 = [descriptor_skybox_image_info, descriptor_clouds_image_info];
+        let descriptor_image_infos_2 = [descriptor_clouds_sampler_info];
 
-        let sky_compute_descriptor_write = vk::WriteDescriptorSet::default()
-            .descriptor_count(1)
+        let sky_compute_descriptor_write_1 = vk::WriteDescriptorSet::default()
+            .descriptor_count(2)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
             .dst_binding(0)
             .dst_set(sky_compute_pipeline_descriptor_set)
-            .image_info(&descriptor_image_infos);
+            .image_info(&descriptor_image_infos_1);
+        let sky_compute_descriptor_write_2 = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .dst_binding(2)
+            .dst_set(sky_compute_pipeline_descriptor_set)
+            .image_info(&descriptor_image_infos_2);
+        
 
         let descriptor_svt_image_info = vk::DescriptorImageInfo::default()
             .image_view(svt.sparse_image_view)
@@ -150,14 +167,15 @@ impl ConstantDescriptorSets {
             .buffer(lights_buffer.buffer)
             .offset(0)
             .range(u64::MAX);
-        let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
-            .image_view(skybox.image_view)
+        let descriptor_skybox_sampler_info = vk::DescriptorImageInfo::default()
+            .image_view(skybox.skybox_image_view)
             .sampler(skybox.sampler)
             .image_layout(vk::ImageLayout::GENERAL);
+
  
         let descriptor_svt_image_infos = [descriptor_svt_image_info, descriptor_svt_metadata_image_info];
         let descriptor_svo_buffers_infos = [descriptor_svo_bitmasks_info, descriptor_svo_indices_info, descriptor_svo_aabbs_info, descriptor_light_buffer_info];
-        let descriptor_skybox_combined_image_sampler_infos = [descriptor_skybox_image_info];
+        let descriptor_skybox_combined_image_sampler_infos = [descriptor_skybox_sampler_info, descriptor_clouds_sampler_info];
 
         let render_compute_svt_images_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(descriptor_svt_image_infos.len() as u32)
@@ -178,7 +196,7 @@ impl ConstantDescriptorSets {
             .dst_set(render_compute_pipeline_descriptor_set)
             .image_info(&descriptor_skybox_combined_image_sampler_infos);
         
-        device.update_descriptor_sets(&[sky_compute_descriptor_write, render_compute_svt_images_descriptor_write, render_compute_svo_buffers_descriptor_write, render_compute_skybox_descriptor_write], &[]);
+        device.update_descriptor_sets(&[sky_compute_descriptor_write_1, sky_compute_descriptor_write_2, render_compute_svt_images_descriptor_write, render_compute_svo_buffers_descriptor_write, render_compute_skybox_descriptor_write], &[]);
 
         Self {
             render_compute_pipeline_descriptor_set,
@@ -787,10 +805,48 @@ impl InternalApp {
         );
 
         let push_constants = pipeline::SkyComputePushConstants {
-            sun: self.sun.normalized().with_w(0f32),
+            sun: self.sun.normalized().with_w(elapsed),
         };
         self.device.cmd_push_constants(cmd, self.sky_compute_pipeline.entry_points[0].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytemuck::bytes_of(&push_constants));
-        self.device.cmd_dispatch(cmd, skybox::RESOLUTION.div_ceil(32), skybox::RESOLUTION.div_ceil(32), 6);
+        self.device.cmd_dispatch(cmd, skybox::CLOUDS_RESOLUTION.div_ceil(32), skybox::CLOUDS_RESOLUTION.div_ceil(32), 1);
+
+        let clouds_subresource_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        let clouds_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(self.skybox.clouds_image)
+            .subresource_range(clouds_subresource_range);
+        let image_memory_barriers = [clouds_image_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        self.device.cmd_pipeline_barrier2(cmd, &dep);
+        
+        self.device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.sky_compute_pipeline.entry_points[1].pipeline_layout,
+            0,
+            &[constant_descriptor_sets.sky_compute_pipeline_descriptor_set],
+            &[],
+        );
+        self.device.cmd_bind_pipeline(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            self.sky_compute_pipeline.entry_points[1].pipeline,
+        );
+
+        self.device.cmd_push_constants(cmd, self.sky_compute_pipeline.entry_points[1].pipeline_layout, vk::ShaderStageFlags::COMPUTE, 0, bytemuck::bytes_of(&push_constants));
+        self.device.cmd_dispatch(cmd, skybox::SKYBOX_RESOLUTION.div_ceil(32), skybox::SKYBOX_RESOLUTION.div_ceil(32), 6);
+
+        
 
         let skybox_subresource_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -805,7 +861,7 @@ impl InternalApp {
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
-            .image(self.skybox.image)
+            .image(self.skybox.skybox_image)
             .subresource_range(skybox_subresource_range);
         let image_memory_barriers = [skybox_image_barrier];
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
