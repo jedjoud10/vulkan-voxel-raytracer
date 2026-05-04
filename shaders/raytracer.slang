@@ -58,6 +58,42 @@ float3 heatmap(float t) {
     ), 0.0, 1.0);
 }
 
+
+// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
+Optional<float2> ray_plane_intersect(float3 ray_dir, float3 ray_pos, float plane_height) {
+    float denom = -ray_dir.y;
+    if (abs(denom) > 0.0001f) // your favorite epsilon
+    {
+        float t = -(plane_height - ray_pos.y) / denom;
+        float3 pos = t * ray_dir + ray_pos;
+
+        if (t >= 0) {
+            return Optional<float2>(pos.xz);
+        } else {
+            return none;
+        }
+    }
+    return none;
+}
+
+
+// extra func to calculate sun colour
+float3 sun_colour(float3 light) {
+    // TODO: use atmo sky scattering instead of this
+    float3 midday_colour = pow(float3(252, 232, 212) / 255.0, 1/2.2);
+    float3 sunset_colour = pow(float3(249, 128, 7) / 255.0, 1/2.2);
+
+    return lerp(sunset_colour, midday_colour, smoothstep(0, 0.2, light.y));
+}
+
+float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
+    float4 clouds_colour_opacity = 0;
+    if (let pos = ray_plane_intersect(ray_dir, ray_pos, 800)) {
+        clouds_colour_opacity = clouds_sampler.Sample(pos.xy / 8000 - 0.5);
+    }
+    return clouds_colour_opacity;
+}
+
 [shader("compute")]
 [numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
 void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid: SV_GroupID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform DebugType debug_type, uniform float time) {
@@ -247,27 +283,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     shadow = 1.0;
                 }
 
-                /*
-                float sky_visibility = 1.0; 
-                // sky visibility is an extra term that is used for ambient lighting
-                if (roughness > 0.3) {
-                    float3 reflected = reflect(iterative_ray_dir, normal);
-                    int sample_count = floor(roughness * 4);
-
-                    if (sample_count >= 1) {
-                        sky_visibility = 0.0;
-                        for (int k = 0; k < sample_count; k++) {
-                            float3 rng = (hash33(world * 23.12123545 + k * 30.43324) * 2.0 - 1.0);
-                            float3 dir = normalize(reflected + rng * 0.25 * pow(roughness, 2));
-                            float d = 0;
-                            bool t = trace_shi<8>(world - iterative_ray_dir * 0.05 + dir * 0.05, dir, svo, stats).hit;
-                            sky_visibility += (t ? 0.0 : 1) / sample_count;
-                        }
-                        sky_visibility = lerp(sky_visibility, 1, roughness);  
-                    }
-                }
-                */
-
                 PbrSurfaceData pbr_surface_data = PbrSurfaceData(world, diffuse, normal, roughness, metallic, pow(ao, 1.4), shadow);
                 CameraData camera_data = CameraData(-iterative_ray_dir);
 
@@ -295,22 +310,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
                 color *= temp_color;
 
-                /*
-                {
-                    float r = 0;
-                    float3 d = reflect(ray_dir, normal);
-                    [loop]
-                    for (int j = 0; j < 64; j++) {
-                        r += cube_trace_shi(world + d * (j+0.5) * 0.2, 0.1 + pow(j * 0.2, 1.3), svo, stats);
-                        if (r > 0.8) {
-                            break;
-                        }
-                    }
-                
-                    color *= clamp(1-r*0.05, 0, 1);
-                }
-                */
-
                 break;
             }
         } else {
@@ -318,8 +317,6 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             float3 sky_colour = skybox_sampler.Sample(iterative_ray_dir).xyz;
             float3 composed_sky_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
             color *= composed_sky_colour;
-            //color *= skybox_sampler.Sample(iterative_ray_dir).xyz;
-            //color *= sky(sun.xyz, iterative_ray_dir, iterative_ray_pos, true, true);
             break;
         }
 
@@ -337,7 +334,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
             break;
         case DebugType::BufferFetches:
-            output[id.xy] = float4(heatmap(stats.buffer_fetches / 256.0), 0);
+            output[id.xy] = float4(heatmap(stats.buffer_fetches / 32.0), 0);
             break;
         case DebugType::Normals:
             output[id.xy] = float4(nth_normals, 0);

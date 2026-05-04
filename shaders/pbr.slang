@@ -1,8 +1,6 @@
 #ifndef PBR
 #define PBR
 
-#include <sky.slang>
-
 #define PI 3.1415926538
 
 
@@ -57,8 +55,16 @@ float3 specular(float3 f0, float roughness, float3 v, float3 l, float3 n, float3
 	return num / denom;
 }
 
+public interface LightData {
+	/*
+	property float3 color { get; }
+	property float3 direction { get; }
+	property float strength { get; }
+	*/
+}
+
 // Sun data struct
-public struct SunData {
+public struct SunData : LightData {
 	public float3 direction;
 	public float3 color;
 };

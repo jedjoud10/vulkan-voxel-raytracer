@@ -1,10 +1,11 @@
-use std::{collections::VecDeque, ops::ControlFlow, time::Instant};
+use std::{collections::VecDeque, fmt, ops::ControlFlow, time::Instant};
 use crate::utils::*;
 use ash::vk;
 use bit_vec::BitVec;
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::vulkan::Allocator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use serde::ser::{SerializeSeq, SerializeStruct};
 use crate::buffer::{self, Buffer};
 
 use super::{SVO_DEPTH, TOTAL_SIZE, BOTTOM_NODE, FULL_NODE};
@@ -233,22 +234,23 @@ impl SparseVoxelOctree {
         }
     }
 
-    // TODO: optimize by only re-building what has changed, though that will require a way to figure out new indices and bitmasks without having to rewrite the entirety of the buffers
-    // FIXME: very very bad! does a full rebuild of the AS even though we might have only modified a few nodes here and there
-    // unfortunately, as the AS is using packed buffer and packed nodes, *adding* a new node will require you to shift all nodes after that
-    // depending on the child indexing order, this could be very cheap (i.e inserting near the end) or very expensive (i.e inserting near the front and having to shift all elements after that)
     pub unsafe fn rebuild(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, mut allocator: &mut Allocator) {
-        let (bitmasks, indices, aabbs) = super::convert_to_buffers(&self.nodes);
-        let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(bitmasks.as_slice());
-        let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(indices.as_slice());
-        let aabb_buffer_bytes = bytemuck::cast_slice::<_, u8>(aabbs.as_slice());
+        let res = convert_to_buffers(&self.nodes);
+        self.apply_update_gpu_buffers(device, pool, queue, allocator, &res);
+    }
 
+    pub unsafe fn apply_update_gpu_buffers(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, mut allocator: &mut Allocator, built: &SparseVoxelTreeBuildResultGpuBuffers) {
+        log::info!("writing new data to sparse voxel tree buffers...");
+        let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.bitmasks.as_slice());
+        let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.indices.as_slice());
+        let aabb_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.aabbs.as_slice());
+    
         // TODO: use the dedicated per-frame command buffer and a scratch buffer and avoid doing the device.wait_idle() inside these calls
         buffer::write_to_buffer(device, pool, queue, self.bitmask_buffer.buffer, &mut allocator, bitmasks_buffer_bytes);
         buffer::write_to_buffer(device, pool, queue, self.index_buffer.buffer, &mut allocator, indices_buffer_bytes);
         buffer::write_to_buffer(device, pool, queue, self.aabb_buffer.buffer, &mut allocator, aabb_buffer_bytes);
     }
-
+    
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
         self.bitmask_buffer.destroy(device, allocator);
         self.index_buffer.destroy(device, allocator);
@@ -268,6 +270,69 @@ pub struct FlatNode {
     pub children: Option<Box<[Option<usize>; 64]>>,
     pub full: bool,
 }
+
+
+#[derive(minicbor::Encode, minicbor::Decode)]
+pub struct SparseVoxelTreeBuildResultGpuBuffers {
+    #[n(0)] pub indices: Vec<u32>,
+    #[n(1)] pub bitmasks: Vec<u64>,
+    #[n(2)] pub aabbs: Vec<u64>,
+}
+
+/*
+struct CustomVisitor;
+
+impl<'de> serde::de::Visitor<'de> for CustomVisitor {
+    type Value = SerializedChildren;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("wtf fuck you")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>, {
+        let mut count = 0usize;
+        let mut children = SerializedChildren([const { None }; 64]);
+        while let Some(child_index) = seq.next_element::<Option<usize>>()? {
+            children.0[count] = child_index;
+            count += 1;
+        }
+        debug_assert_eq!(count, 64);
+        Ok(children)
+    }
+}
+
+// kill me
+pub struct SerializedChildren(pub [Option<usize>; 64]);
+
+impl serde::Serialize for SerializedChildren {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        let mut seq = serializer.serialize_seq(Some(64))?;
+        for elem in self.0.iter() {
+            seq.serialize_element(&elem)?;
+        }
+        seq.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SerializedChildren {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de> {
+        deserializer.deserialize_seq(CustomVisitor)
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SerializedFlatNode {
+    pub bounds: vek::Aabb<u32>,
+    pub children: Option<Box<SerializedChildren>>,
+    pub full: bool,
+}
+*/
 
 impl FlatNode {
     pub fn root() -> Self {
@@ -300,7 +365,12 @@ fn pack_aabb_bounds(vek::Aabb { min, max }: vek::Aabb<u32>, represents_cuboid: b
     min | max << 30 | flags << 60
 }
 
-pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<u64>) {
+
+// TODO: optimize by only re-building what has changed, though that will require a way to figure out new indices and bitmasks without having to rewrite the entirety of the buffers
+// FIXME: very very bad! does a full rebuild of the AS even though we might have only modified a few nodes here and there
+// unfortunately, as the AS is using packed buffer and packed nodes, *adding* a new node will require you to shift all nodes after that
+// depending on the child indexing order, this could be very cheap (i.e inserting near the end) or very expensive (i.e inserting near the front and having to shift all elements after that)
+pub fn convert_to_buffers(nodes: &[FlatNode]) -> SparseVoxelTreeBuildResultGpuBuffers {
     let start = Instant::now();
     let mut queue = VecDeque::<TraversalNode>::new();
     queue.push_back(TraversalNode { node: &nodes[0], height: SVO_DEPTH, parent_base_child_index: None, self_packed_child_offset: 0 });
@@ -421,7 +491,11 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> (Vec<u64>, Vec<u32>, Vec<u64>) 
     }
     */
 
-    (bitmask_vec, index_vec, aabb_vec)
+    SparseVoxelTreeBuildResultGpuBuffers {
+        indices: index_vec,
+        bitmasks: bitmask_vec,
+        aabbs: aabb_vec,
+    }
 }
 
 

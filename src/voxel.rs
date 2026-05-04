@@ -1,7 +1,8 @@
-use std::{ffi::CString, str::FromStr};
+use std::{ffi::CString, io::{Read, Write}, path::{Path, PathBuf}, str::FromStr};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 use noise::NoiseFn;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::{buffer::{self}};
 
 mod recursive;
@@ -36,75 +37,95 @@ pub unsafe fn create_sparse_structures(
     let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
     let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-    //let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, nodes: convert_recursive_to_flat_map(create_recursive_structure()) };
     let mut svo = SparseVoxelOctree { bitmask_buffer, index_buffer, aabb_buffer, nodes: vec![FlatNode::root()] };
 
-    let mut fbm = noise::Fbm::<noise::Perlin>::new(0); 
-    fbm.frequency = 0.001;
-    let fbm_borrow = &fbm;
+    let cached_folder_path = dirs::data_dir()
+        .map(|data_dir| data_dir.join("nodlemanstuff").join("vulkanvoxelraytracer"));
+    let cached_file_path = cached_folder_path
+        .as_ref()
+        .cloned()
+        .map(|data_dir| data_dir.join("map.data"));
+
     
-    let (tx, rx) = std::sync::mpsc::channel::<Chunk>();
-    let tx_borrow = &tx;
-    
-    //let chunks = Vec::<Chunk>::new();
+    let cached_file = cached_file_path.as_ref().map(|path| std::fs::File::open(path).ok()).flatten();
 
-    let chunks = std::thread::scope(|scope| {
-        let num_chunks = (util::TOTAL_SIZE as usize / 64).min(8);
-        let vertical_chunks = 2;
+    if let Some(cached_file) = cached_file {
+        // load data from file
+        log::warn!("{}", cached_file_path.unwrap().as_os_str().to_str().unwrap());
+        log::info!("cache file found, loading chunks...");
+        log::info!("cache file size: {}", cached_file.metadata().unwrap().len());
 
-        for x in 0..num_chunks {
-            for y in 0..vertical_chunks {
-                for z in 0..num_chunks {
-                    scope.spawn(move || {
-                    let chunk_position = vek::Vec3::new(x, y, z);
-                    let chunk = bit_vec::BitVec::from_fn(64*64*64, |index| {
-                        let local_position = util::index_to_offset(index, 64);
-                        let world_position = local_position + chunk_position * 64;
-                        let pos = world_position.as_::<f64>();
+        let mut zlib_decoder = flate2::read::ZlibDecoder::new(cached_file);
+        let mut vec = Vec::<u8>::new();
+        zlib_decoder.read_to_end(&mut vec).unwrap();
+        let res = minicbor::decode::<SparseVoxelTreeBuildResultGpuBuffers>(&vec).unwrap();
+        svo.apply_update_gpu_buffers(device, pool, queue, &mut allocator, &res);
+    } else {
+        // regenerate chunks and save to file
+        log::warn!("cache file not found, regenerating chunks...");
+        let mut fbm = noise::Fbm::<noise::Perlin>::new(0); 
+        fbm.frequency = 0.001;
+        let fbm_borrow = &fbm;
+        
+        let (tx, rx) = std::sync::mpsc::channel::<Chunk>();
+        let tx_borrow = &tx;
 
-                        let height = fbm_borrow.get([pos.x, pos.z]) * 300.0f64 + 80.0f64;
-                        let height = (height / 10f64).floor() * 10f64;
+        let chunks = std::thread::scope(|scope| {
+            let num_chunks = (util::TOTAL_SIZE as usize / 64).min(8);
+            let vertical_chunks = 2;
 
-                        pos.y < height
-                    });
-                
-                    tx_borrow.send(Chunk {
-                        pos: chunk_position.as_::<u32>(),
-                        data: chunk,
-                    }).unwrap();
-                    log::info!("sent chunk {chunk_position}");
-                    });
+            for x in 0..num_chunks {
+                for y in 0..vertical_chunks {
+                    for z in 0..num_chunks {
+                        scope.spawn(move || {
+                        let chunk_position = vek::Vec3::new(x, y, z);
+                        let chunk = bit_vec::BitVec::from_fn(64*64*64, |index| {
+                            let local_position = util::index_to_offset(index, 64);
+                            let world_position = local_position + chunk_position * 64;
+                            let pos = world_position.as_::<f64>();
+
+                            let height = fbm_borrow.get([pos.x, pos.z]) * 300.0f64 + 80.0f64;
+                            let height = (height / 10f64).floor() * 10f64;
+
+                            pos.y < height
+                        });
+                    
+                        tx_borrow.send(Chunk {
+                            pos: chunk_position.as_::<u32>(),
+                            data: chunk,
+                        }).unwrap();
+                        log::info!("sent chunk {chunk_position}");
+                        });
+                    }
                 }
             }
+
+            rx.into_iter().take(num_chunks*vertical_chunks*num_chunks).collect::<Vec<_>>()
+        });
+
+        for chunk in chunks {
+            svo.register_chunk(chunk.pos, chunk.data);
         }
 
-        rx.into_iter().take(num_chunks*vertical_chunks*num_chunks).collect::<Vec<_>>()
-    });
+        let res: SparseVoxelTreeBuildResultGpuBuffers = convert_to_buffers(&svo.nodes);
+        svo.apply_update_gpu_buffers(device, pool, queue, allocator, &res);
+        log::info!("created & updated sparse voxel tree buffers");
 
-    for chunk in chunks {
-        svo.register_chunk(chunk.pos, chunk.data);
+        if let Some(path) = cached_file_path {
+            log::warn!("{}", path.as_os_str().to_str().unwrap());
+            std::fs::create_dir_all(&cached_folder_path.unwrap()).unwrap();
+            let file = std::fs::File::create(&path).unwrap();
+            let zlib_encoder = flate2::write::ZlibEncoder::new(file, flate2::Compression::fast());
+            let mut writer = minicbor::encode::write::Writer::new(zlib_encoder);
+            minicbor::encode(res, &mut writer).unwrap();
+            log::debug!("wrote cached serialized data to file");
+        } else {
+            log::error!("cached file path could not be found");
+        }
     }
-
-
-    /*
-    for i in 0..50000 {
-        let x = pseudo_random(i) % TOTAL_SIZE;
-        let y = pseudo_random(i + x * 3231) % 32 + 256;
-        let z = pseudo_random(i + y * 1212) % TOTAL_SIZE;
-        
-        svo.set(vek::Vec3::new(x,y,z), true);
-    }
-    */
-
-    //svo.set(vek::Vec3::new(1,4,5), true);
-
-    //svo.set(vek::Vec3::new(1,9,5), true);
-
-
-    svo.rebuild(device, pool, queue, allocator);
-    log::info!("created & updated sparse voxel tree buffers");
-
-    let chunks = convert_to_sparse_image_chunks(&svo.nodes);
+    
+    let chunks = vec![];
+    //let chunks = convert_to_sparse_image_chunks(&svo.nodes);
     let svt = create_sparse_voxel_texture(&device, &mut allocator, binder, queue, pool, queue_family_index, chunks);
     log::info!("created sparse voxel texture");
 

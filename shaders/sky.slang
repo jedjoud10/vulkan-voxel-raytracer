@@ -185,32 +185,6 @@ float stars(float3 rd) {
     return stars * rd.y;
 }
 
-// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
-Optional<float2> ray_plane_intersect(float3 ray_dir, float3 ray_pos, float plane_height) {
-    float denom = -ray_dir.y;
-    if (abs(denom) > 0.0001f) // your favorite epsilon
-    {
-        float t = -(plane_height - ray_pos.y) / denom;
-        float3 pos = t * ray_dir + ray_pos;
-
-        if (t >= 0) {
-            return Optional<float2>(pos.xz);
-        } else {
-            return none;
-        }
-    }
-    return none;
-}
-
-float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
-    float4 clouds_colour_opacity = 0;
-    if (let pos = ray_plane_intersect(ray_dir, ray_pos, 800)) {
-        clouds_colour_opacity = clouds_sampler.Sample(pos.xy / 8000 - 0.5);
-    }
-    return clouds_colour_opacity;
-}
-
-
 // the sky colour is a mix of SkyTheDragon's realtistic sky and thenuclearwolf's starnight implementation
 float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnabled = true, bool clouds_enabled = false) {
     float sunHeight = sun_dir.y;
@@ -239,14 +213,6 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
 }
 
 
-// extra func to calculate sun colour
-float3 sun_colour(float3 light) {
-    // TODO: use atmo sky scattering instead of this
-    float3 midday_colour = pow(float3(252, 232, 212) / 255.0, 1/2.2);
-    float3 sunset_colour = pow(float3(249, 128, 7) / 255.0, 1/2.2);
-
-    return lerp(sunset_colour, midday_colour, smoothstep(0, 0.2, light.y));
-}
 
 
 // goated approximation for now
