@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use fixedbitset::FixedBitSet;
+
 use crate::utils::*;
 
 use super::{sparse::*, recursive::*};
@@ -182,6 +184,82 @@ pub fn convert_to_sparse_image_chunks(nodes: &[FlatNode]) -> Vec<SparseImageChun
     binding_chunks
 }
 
+struct NotSoSimpleTraversalNode {
+    mip_index: usize,
+    index_within_mip: usize,
+    height: u32,
+    origin: vek::Vec3<u32>,
+}
+
+
+// mip 0 is bottom most mip
+// mip N-1 is one node (top mip)
+pub fn convert_mips_to_nodes<const MIP_COUNT: usize>(starting_origin: vek::Vec3<u32>, starting_height: u32, all_mips: &[FixedBitSet; MIP_COUNT], any_mips: &[FixedBitSet; MIP_COUNT]) -> Vec<FlatNode> {
+    let mut queue = VecDeque::<NotSoSimpleTraversalNode>::new();
+    queue.push_back(NotSoSimpleTraversalNode { mip_index: MIP_COUNT-1, index_within_mip: 0, height: starting_height, origin: starting_origin });
+
+    let mut nodes = Vec::<FlatNode>::new();
+
+    while let Some(NotSoSimpleTraversalNode { mip_index, index_within_mip, height, origin }) = queue.pop_front() {
+        let size: u32 = 4u32.pow(height as u32);
+        let bounds = vek::Aabb::<u32> {
+            min: origin,
+            max: origin + size,
+        };
+
+        let is_node_any = (any_mips[mip_index])[index_within_mip];
+        let is_node_all = (all_mips[mip_index])[index_within_mip];
+
+        let children = if height == 0 {
+            None
+        } else {
+            if is_node_all {
+                None
+            } else {
+                if is_node_any {
+                    let flat_node_children = Box::new([Option::<usize>::None; 64]);
+
+                    // node has children, add them to queue
+                    for child_index in 0..(4*4*4) {
+                        let child_offset = child_index_to_child_offset(child_index);
+
+                        // look at next mip (x-1) and get child
+                        let child_origin = origin.as_::<usize>() * 4 + child_offset;
+                        let child_index_in_next_mip = offset_to_index(child_origin, 64);
+                        
+                        // if the child is present, then it must also have a node
+                        if (any_mips[mip_index-1])[child_index_in_next_mip] {
+                            queue.push_back(NotSoSimpleTraversalNode {
+                                mip_index: mip_index-1,
+                                index_within_mip: child_index_in_next_mip,
+                                height: height-1,
+                                origin: child_origin.as_::<u32>(),
+                            });
+                        }
+                    }
+
+                    Some(flat_node_children)
+                } else {
+                    None
+                }
+            }
+        };
+
+        // add node to flat node list
+        nodes.push(FlatNode {
+            bounds,
+            children,
+            full: is_node_all,
+        });
+    }
+
+    log::info!("{}", nodes.len());
+    
+    nodes
+}
+
+
+/*
 struct ConvertTraversalNode<'a> {
     node: &'a RecursiveNode,
     parent_index: usize,
@@ -215,3 +293,4 @@ pub fn convert_recursive_to_flat_map(node: RecursiveNode) -> Vec<FlatNode> {
 
     map
 }
+*/

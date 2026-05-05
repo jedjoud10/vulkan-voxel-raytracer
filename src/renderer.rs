@@ -77,6 +77,8 @@ pub struct InternalApp {
     svo: voxel::SparseVoxelOctree,
     svt: voxel::SparseVoxelTexture,
 
+    pub was_resized: bool,
+
     skybox: skybox::Skybox,
     lights_buffer: buffer::Buffer,
     lights: Vec<vek::Vec4<f32>>,
@@ -254,7 +256,8 @@ impl InternalApp {
             &debug_marker,
             queue,
             pool,
-            queue_family_index
+            queue_family_index,
+            args.force_regenerate,
         );
         log::info!("created sparse voxel structures");
 
@@ -323,6 +326,7 @@ impl InternalApp {
             svo,
             svt,
             skybox,
+            was_resized: false,
             frames_in_flight,
             ticker: ticker::Ticker { accumulator: 0f32, count: 0 },
             sun: vek::Vec3::new(1f32, 0.3f32,0.5f32).normalized(),
@@ -340,8 +344,9 @@ impl InternalApp {
         self.svo.rebuild(&self.device, self.pool, self.queue, &mut self.allocator);
     }
 
-    pub unsafe fn resize(&mut self, width: u32, height: u32) {
-        log::warn!("resizing! width: {width}, height: {height}");
+    pub unsafe fn recreate_swapchain(&mut self) {
+        log::warn!("recreating swapchain");
+        self.was_resized = false;
         self.device.device_wait_idle().unwrap();
 
         for frame in self.frames_in_flight.iter_mut() {
@@ -355,6 +360,9 @@ impl InternalApp {
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
 
+        let width = self.window.inner_size().width;
+        let height = self.window.inner_size().height;
+        
         let extent = vk::Extent2D { width, height };
 
         let (swapchain_loader, swapchain, images, swapchain_format) = swapchain::create_swapchain(
@@ -400,6 +408,16 @@ impl InternalApp {
         for ((frame, (rt_image, rt_image_allocation)), swapchain_image) in self.frames_in_flight.iter_mut().zip(rt_images).zip(images) {
             frame.recreate_image_views_and_update_descriptor_sets(&self.device, swapchain_format, rt_image, rt_image_allocation, swapchain_image);
         }
+        
+        for frame in self.frames_in_flight.iter_mut() {
+            self.device.destroy_semaphore(frame.present_complete_semaphore, None);
+            self.device.destroy_semaphore(frame.render_finished_semaphore, None);
+
+            let create_info = vk::SemaphoreCreateInfo::default();
+            frame.render_finished_semaphore = self.device.create_semaphore(&create_info, None).unwrap();
+            frame.present_complete_semaphore = self.device.create_semaphore(&create_info, None).unwrap();
+        }
+
 
         self.device.device_wait_idle().unwrap();
     }
@@ -469,24 +487,24 @@ impl InternalApp {
 
         if let Err(err) = self.device.wait_for_fences(&[end_fence], true, u64::MAX) {
             log::error!("wait on fence err: {:?}", err);
+            //return;
+        } else {
+            let mut timestamps = [0u64; 2];
+            let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64).is_ok();
+            if okay {
+                let delta_in_ms = ((timestamps[1].saturating_sub(timestamps[0])) as f64 * self.timestamp_period as f64) / 1000000.0f64;
+                self.stats.push_query_timings(delta_in_ms);
+            }
         }
 
-        let mut timestamps = [0u64; 2];
-        let okay = self.device.get_query_pool_results(self.query_pool, 0, &mut timestamps, vk::QueryResultFlags::TYPE_64).is_ok();
-        if okay {
-            let delta_in_ms = ((timestamps[1].saturating_sub(timestamps[0])) as f64 * self.timestamp_period as f64) / 1000000.0f64;
-            self.stats.push_query_timings(delta_in_ms);
-        }
-
-        self.device.reset_fences(&[end_fence]).unwrap();
 
 
         for (i, light) in self.lights.iter_mut().enumerate() { 
-            let tmp = vek::Lerp::lerp(light.xyz(), self.movement.position + vek::Vec3::new((i as f32).sin(), 0.0, (i as f32).cos()) * 0.05f32, 3.5 * delta);
+            let tmp = vek::Lerp::lerp(light.xyz(), self.movement.position + vek::Vec3::new((i as f32 + elapsed).sin(), 0.0, (i as f32 + elapsed).cos()) * 5.5f32, 3.5 * delta);
             *light = vek::Vec4::from_point(tmp);
         }
 
-        let (acquired_swapchain_image_index, _) = self
+        let (acquired_swapchain_image_index, suboptimal) = self
             .swapchain_loader
             .acquire_next_image(
                 self.swapchain,
@@ -495,6 +513,19 @@ impl InternalApp {
                 vk::Fence::null(),
             )
             .unwrap();
+
+        let start = std::time::Instant::now();
+
+        if suboptimal || self.was_resized {
+            log::debug!("suboptimal: {suboptimal}");
+            log::debug!("was resized: {}", self.was_resized);
+            
+            self.recreate_swapchain();
+            self.was_resized = false;
+            return;
+        }
+
+        self.device.reset_fences(&[end_fence]).unwrap();
 
         let render_finished_semaphore = [self.frames_in_flight[acquired_swapchain_image_index as usize].render_finished_semaphore];
         
@@ -508,8 +539,6 @@ impl InternalApp {
             .begin_command_buffer(cmd, &cmd_buffer_begin_info)
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
-
-        self.device.cmd_update_buffer(cmd, self.lights_buffer.buffer, 0, bytemuck::cast_slice(&self.lights));
 
         //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
@@ -529,9 +558,21 @@ impl InternalApp {
             .dst_queue_family_index(self.queue_family_index)
             .image(dst_image)
             .subresource_range(subresource_range);
+        let lights_buffer_barrier = vk::BufferMemoryBarrier2::default()
+            .buffer(self.lights_buffer.buffer)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .size(vk::WHOLE_SIZE);
         let image_memory_barriers = [dst_undefined_to_blit_dst_layout_transition];
-        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        let buffer_memory_barriers = [lights_buffer_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
         self.device.cmd_pipeline_barrier2(cmd, &dep);
+        
+        self.device.cmd_update_buffer(cmd, self.lights_buffer.buffer, 0, bytemuck::cast_slice(&self.lights));
 
         self.device.cmd_bind_descriptor_sets(
             cmd,
@@ -762,7 +803,7 @@ impl InternalApp {
             .image_indices(&indices)
             .wait_semaphores(&render_finished_semaphore);
 
-        self.swapchain_loader
+        let suboptimal = self.swapchain_loader
             .queue_present(self.queue, &present_info)
             .unwrap();
 
@@ -772,6 +813,14 @@ impl InternalApp {
        
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
+
+        let end = std::time::Instant::now();
+
+        //log::debug!("CPU thread took: {}us", (end-start).as_micros());
+
+        if suboptimal {
+            self.recreate_swapchain();
+        }
     }
 
     pub unsafe fn destroy(mut self) {

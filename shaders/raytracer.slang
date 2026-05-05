@@ -140,6 +140,9 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 normal = normalize(world - ray.block_pos - 0.5);
             }
 
+            normal = normalize(normal + (hash33(floor(world * 16)) - 0.5) * 0.3);
+            
+
             float3 diffuse = 1.0;
 
             float roughness = 0.50;
@@ -277,7 +280,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, shadow_ray_start, clouds_sampler).a))) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
-                    bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004, sun.xyz, svo, stats).hit;
+                    bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.05, sun.xyz, svo, stats).hit;
                     shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start, clouds_sampler).a));
                 } else {
                     shadow = 1.0;
@@ -297,13 +300,17 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 for (int l = 0; l < 10; l++) {
                     float3 light_pos = lights_buffer[l].xyz;
                     float3 light_towards_position = shadow_ray_start - light_pos;
-
-                    if (length(light_towards_position) < 10) {
+                    float d = length(light_towards_position);
+                    if (d < 10) {
+                        
                         float unshadowed_dist = length(light_towards_position);
                         light_towards_position = normalize(light_towards_position);
                         float shadowed_dist = trace_shi<4096>(light_pos, light_towards_position, svo, stats).distance;
                         float shadow = (((shadowed_dist + 0.1) > unshadowed_dist) ? 1.0 : 0);
-                        temp_color += shadow * hash33(l * 3.21312) * 0.1;
+                        float n_dot_l = saturate(dot(normal, -normalize(light_towards_position)));
+                        float strength = (1 / (d*d)) * smoothstep(0, 1, 10-d);
+                        temp_color += shadow * n_dot_l * strength * hash33(l * 3.21312) * 0.3; 
+                        
                     }
                 }
                 */

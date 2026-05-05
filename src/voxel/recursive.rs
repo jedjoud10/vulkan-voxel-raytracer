@@ -1,3 +1,4 @@
+/*
 use crate::utils::*;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use smallvec::SmallVec;
@@ -249,3 +250,4 @@ pub fn create_recursive_structure() -> RecursiveNode {
     log::debug!("creating recursive structure of depth {SVO_DEPTH}...");
     test_sparse_voxel_octree_recurse(SVO_DEPTH, 0x0323f)
 }
+*/

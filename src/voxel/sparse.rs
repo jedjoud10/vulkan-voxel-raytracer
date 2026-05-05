@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt, ops::ControlFlow, time::Instant};
+use std::{collections::{HashMap, VecDeque}, fmt, ops::ControlFlow, time::Instant};
 use crate::utils::*;
 use ash::vk;
 use bit_vec::BitVec;
@@ -7,8 +7,8 @@ use gpu_allocator::vulkan::Allocator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::ser::{SerializeSeq, SerializeStruct};
 use crate::buffer::{self, Buffer};
-
 use super::{SVO_DEPTH, TOTAL_SIZE, BOTTOM_NODE, FULL_NODE};
+use super::chunk::{Chunk, ChunkData};
 
 pub struct SparseVoxelOctree {
     pub bitmask_buffer: Buffer,
@@ -18,11 +18,33 @@ pub struct SparseVoxelOctree {
 }
 
 impl SparseVoxelOctree {
-    // TODO: impl
-    pub fn register_chunk(&mut self, chunk_position: vek::Vec3<u32>, chunk: BitVec) {
-        log::debug!("registering chunk {chunk_position}");
+    pub unsafe fn new_with_root_node(
+        device: &ash::Device,
+        mut allocator: &mut Allocator,
+        binder: &Option<ash::ext::debug_utils::Device>,
+    ) -> Self {
+        // each node contains a u64 bitmask that checks if any of its children are leaf nodes
+        // another buffer stores the "children base" index references as u16s
+        // it contains a bitmask of its children
+        log::debug!("creating SVO...");
+        let max_svo_element_size = 4096 * 64 * 16;
+        let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        
+        Self {
+            bitmask_buffer,
+            index_buffer,
+            aabb_buffer,
+            nodes: vec![FlatNode::root()]
+        }
+    }
 
-        if !chunk.any() {
+    // TODO: impl
+    pub fn register_chunk(&mut self, chunk: Chunk) {
+        log::debug!("registering chunk {}", chunk.position);
+
+        if chunk.is_empty() {
             log::warn!("chunk was empty, ignoring");
             return;
         }
@@ -81,8 +103,8 @@ impl SparseVoxelOctree {
         for i in 0..(64*64*64) {
             let pos = crate::voxel::util::index_to_offset(i, 64);
 
-            if chunk.get(i).unwrap() {
-                self.set(pos.as_::<u32>() + chunk_position * 64, true);
+            if chunk.get(i) {
+                self.set(pos.as_::<u32>() + chunk.position * 64, true);
             }
         }
     }
@@ -264,13 +286,12 @@ struct TopDownTraversalNode {
     origin: vek::Vec3<u32>,
 }
 
-// TODO: optimize space using NonZero and bitmasks for bottom&full
+// TODO: optimize space using NonZero and bitmasks for full
 pub struct FlatNode {
     pub bounds: vek::Aabb<u32>,
     pub children: Option<Box<[Option<usize>; 64]>>,
     pub full: bool,
 }
-
 
 #[derive(minicbor::Encode, minicbor::Decode)]
 pub struct SparseVoxelTreeBuildResultGpuBuffers {
@@ -279,65 +300,31 @@ pub struct SparseVoxelTreeBuildResultGpuBuffers {
     #[n(2)] pub aabbs: Vec<u64>,
 }
 
-/*
-struct CustomVisitor;
-
-impl<'de> serde::de::Visitor<'de> for CustomVisitor {
-    type Value = SerializedChildren;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("wtf fuck you")
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>, {
-        let mut count = 0usize;
-        let mut children = SerializedChildren([const { None }; 64]);
-        while let Some(child_index) = seq.next_element::<Option<usize>>()? {
-            children.0[count] = child_index;
-            count += 1;
-        }
-        debug_assert_eq!(count, 64);
-        Ok(children)
-    }
-}
-
-// kill me
-pub struct SerializedChildren(pub [Option<usize>; 64]);
-
-impl serde::Serialize for SerializedChildren {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer {
-        let mut seq = serializer.serialize_seq(Some(64))?;
-        for elem in self.0.iter() {
-            seq.serialize_element(&elem)?;
-        }
-        seq.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for SerializedChildren {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de> {
-        deserializer.deserialize_seq(CustomVisitor)
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct SerializedFlatNode {
-    pub bounds: vek::Aabb<u32>,
-    pub children: Option<Box<SerializedChildren>>,
-    pub full: bool,
-}
-*/
-
 impl FlatNode {
     pub fn root() -> Self {
         Self { children: None, full: false, bounds: vek::Aabb::new_empty(vek::Vec3::zero()) }
     }
+}
+
+pub enum Node2Children {
+    Recursive {
+        children: Option<Box<[Option<Box<Node2>>; 64]>>,
+    },
+
+    FlatRoot {
+        flatvec: Vec<Node2>,
+        children: Option<Box<[Option<usize>; 64]>>,
+    },
+
+    FlatSubtree {
+        children: Option<Box<[Option<usize>; 64]>>,
+    }
+}
+
+pub struct Node2 {
+    pub bounds: vek::Aabb<u32>,
+    pub children: Node2Children,
+    pub full: bool,
 }
 
 struct BottomUpPath {

@@ -125,6 +125,8 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
     int face2 = 0;
     if (ray_box_intersection3(inv_dir, dir_sign, ray_pos, aabb_min, aabb_max, tmin, face2)) {
         // make sure we are dealing with leaf nodes and that they represent volume cuboids
+        // FIXME: this, however, causes a lot of shadowing issues for some reason
+        /*
         if (K == 0 && ((bounds >> 60) & 1) == 1) {
             float3 world = ray_pos + ray_dir * (tmin - EPS);
             uint3 block_pos = floor(world);
@@ -135,11 +137,13 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
             stats.exit_type = 4;
             return DdaTraversalOutput(true, world, block_pos, tmin, face2);
         }
+        */
     } else {
         return DdaTraversalOutput(false);
     }
 
-    uint64_t raw = svo.bitmasks_buffer[actual_child_index];
+    uint64_t raw = 0;
+    raw = svo.bitmasks_buffer[actual_child_index];
     stats.buffer_fetches += 1;
 
     /*

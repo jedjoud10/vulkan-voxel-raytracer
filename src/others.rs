@@ -25,12 +25,16 @@ pub unsafe fn create_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool
 }
 
 pub unsafe fn create_query_pool(
-    device: &ash::Device,
+    device: &ash::Device
 ) -> vk::QueryPool {
     let create_info = vk::QueryPoolCreateInfo::default()
         .query_type(vk::QueryType::TIMESTAMP)
         .query_count(2);
-    device.create_query_pool(&create_info, None).unwrap()
+    let query = device.create_query_pool(&create_info, None).unwrap();
+
+    // TODO: requires hostQueryReset
+    //device.reset_query_pool(query, 0, 2);
+    query
 }
 
 pub unsafe fn find_appropriate_queue_family_index(

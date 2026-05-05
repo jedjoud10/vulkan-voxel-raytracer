@@ -42,8 +42,7 @@ void write_clouds(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
     float3 bottom_normals = normalize(float3(derivatives.x, -1, derivatives.y));
     float3 top_normals = normalize(float3(-derivatives.x, 1, -derivatives.y));
 
-    
-    float3 col = saturate(dot(sun, top_normals));
+    float3 col = lerp(saturate(dot(sun, top_normals)), 0.05, 1-smoothstep(0, 0.2, sun.y));
 
     int2 offset = (int2)((hash22(pos * 0.554684) * 2.0 - 1.0) * 1);
     float4 old = clouds_image[(uint2)(id.xy+offset)];
@@ -93,6 +92,6 @@ void write_skybox(uint3 id: SV_DispatchThreadID, uniform float4 sun_and_time) {
     float3 ray_dir = normalize(coords);
     ray_dir.xz = -ray_dir.xz;
     
-    float3 sky_colour = sky(sun, ray_dir, 0.0, false, true);
+    float3 sky_colour = sky(sun, ray_dir, 0.0, true, true);
     skybox_image.Store(id, float4(sky_colour, 0));
 }

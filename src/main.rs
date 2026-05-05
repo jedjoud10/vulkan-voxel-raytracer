@@ -11,7 +11,6 @@ mod swapchain;
 mod voxel;
 mod ticker;
 mod buffer;
-mod rays;
 mod statistics;
 mod utils;
 mod renderer;
@@ -45,7 +44,7 @@ use renderer::InternalApp;
 #[command(about = "Vulkan DDA Voxel Raytracer", long_about = None)]
 struct Args {
     /// Factor to use to decrease the screen resolution
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=4))]
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=4))]
     downscale_factor: u32,
 
     /// Number of shadow samples to use. Set to 0 to disable shadows completely. Set to 1 to use hard-shadows.
@@ -80,6 +79,10 @@ struct Args {
     /// TODO: find better name for this
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=5))]
     group_size_exp: u32,
+
+    /// Use this option to force voxel generator to rebuild terrain, even though there is the cached sparse structure file
+    #[arg(long, default_value_t = false)]
+    force_regenerate: bool,
 }
 
 struct App {
@@ -119,9 +122,9 @@ impl ApplicationHandler for App {
                 self.last = new;
                 input::update(&mut inner.input);
             },
-            WindowEvent::Resized(new) => unsafe {
+            WindowEvent::Resized(_) => {
                 let inner = self.internal.as_mut().unwrap();
-                inner.resize(new.width, new.height);
+                inner.was_resized = true;
             },
 
             // This is horrid...
