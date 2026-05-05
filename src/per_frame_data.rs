@@ -1,36 +1,7 @@
-use ash;
 use ash::vk;
-use clap::Parser;
 use gpu_allocator::vulkan::Allocation;
-use crate::input::Button;
-use crate::input::Input;
-use crate::movement::Movement;
-use winit::event::MouseButton;
-use std::collections::HashMap;
-use std::ops::ControlFlow;
-use std::time::Instant;
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::KeyCode;
-use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::{Window, WindowId};
-use crate::statistics::Statistics;
 
-use crate::swapchain;
-use crate::statistics;
-use crate::ticker;
-use crate::input;
 use crate::pipeline;
-use crate::skybox;
-use crate::voxel;
-use crate::buffer;
-use crate::instance;
-use crate::physical_device;
-use crate::device;
-use crate::movement;
-use crate::debug;
-use crate::others;
 
 pub struct PerFrameDescriptorSets {
     pub main_render_per_frame: vk::DescriptorSet,

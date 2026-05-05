@@ -64,6 +64,6 @@ impl Statistics {
     }
 
     pub fn get_average_in_ms(&self) -> f64 {
-        return self.delta_ms_buffer.iter().sum::<f64>() / self.delta_ms_buffer.len() as f64;
+        self.delta_ms_buffer.iter().sum::<f64>() / self.delta_ms_buffer.len() as f64
     }
 }

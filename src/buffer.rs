@@ -39,7 +39,7 @@ pub unsafe fn create_buffer(
     let allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: &format!("{name} allocation"),
-            requirements: requirements,
+            requirements,
             linear: true,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,
@@ -179,7 +179,7 @@ pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Alloca
     let mut allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: "Staging Buffer",
-            requirements: requirements,
+            requirements,
             linear: true,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::CpuToGpu,
@@ -195,9 +195,9 @@ pub unsafe fn create_staging_buffer(device: &ash::Device, allocator: &mut Alloca
     (staging_buffer, allocation)
 }
 
-pub unsafe fn create_staging_buffer2<'a, 'b>(device: &'a ash::Device, allocator: &'a mut Allocator, bytes: &'b [u8]) -> TemporaryStagingBuffer<'a> {
+pub unsafe fn create_staging_buffer2<'a>(device: &'a ash::Device, allocator: &'a mut Allocator, bytes: &[u8]) -> TemporaryStagingBuffer<'a> {
     let (buffer, allocation) = create_staging_buffer(device, allocator, bytes);
-    return TemporaryStagingBuffer { buffer, allocation: Some(allocation), device, allocator }
+    TemporaryStagingBuffer { buffer, allocation: Some(allocation), device, allocator }
 }
 
 pub struct TemporaryStagingBuffer<'a> {

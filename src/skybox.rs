@@ -73,7 +73,7 @@ pub unsafe fn create_skybox(
     let skybox_image_allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: "",
-            requirements: requirements,
+            requirements,
             linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,
@@ -104,7 +104,7 @@ pub unsafe fn create_skybox(
     let clouds_image_allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: "",
-            requirements: requirements,
+            requirements,
             linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,

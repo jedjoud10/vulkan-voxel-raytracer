@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use ash::vk;
 use raw_window_handle::RawDisplayHandle;
 
-const REQUIRED_INSTANCE_EXTENSIONS: &'static [&'static CStr] =
+const REQUIRED_INSTANCE_EXTENSIONS: &[&CStr] =
     &[
         #[cfg(debug_assertions)]
         ash::ext::debug_utils::NAME,
@@ -11,7 +11,7 @@ const REQUIRED_INSTANCE_EXTENSIONS: &'static [&'static CStr] =
         ash::khr::surface::NAME,
     ];
 
-const REQUIRED_INSTANCE_VALIDATION_LAYERS: &'static [&'static CStr] = &[
+const REQUIRED_INSTANCE_VALIDATION_LAYERS: &[&CStr] = &[
     c"VK_LAYER_KHRONOS_validation",
 ];
 

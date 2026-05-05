@@ -3,7 +3,7 @@ use fixedbitset::FixedBitSet;
 
 use crate::utils::*;
 
-use super::{sparse::*, recursive::*};
+use super::sparse::*;
 
 pub const BOTTOM_NODE: u32 = u32::MAX;
 pub const FULL_NODE: u32 = u32::MAX-1; 
@@ -55,14 +55,14 @@ pub struct SparseImageChunk {
 
 pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3<u32>, node: &FlatNode, nodes: &[FlatNode]) -> SparseImageChunk {
     let mut queue = VecDeque::<SimpleTraversalNode>::new();
-    queue.push_back(SimpleTraversalNode { node: &node, height: 3, origin: origin }); // 4^3 = 64
+    queue.push_back(SimpleTraversalNode { node, height: 3, origin }); // 4^3 = 64
 
     let mut data: Vec<u8> = vec![0u8; 64*64*64];
 
     let chunk_origin = origin;
 
     while let Some(SimpleTraversalNode { node, height, origin  }) = queue.pop_front() {
-        let size: u32 = 4u32.pow(height as u32);
+        let size: u32 = 4u32.pow(height);
 
         let pixel_coordinate_in_chunk = origin - chunk_origin;
 
@@ -71,12 +71,12 @@ pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3
             if height == 0 {
                 let global = pixel_coordinate_in_chunk.as_::<usize>();
                 let i = global.x + global.y * 64 + global.z * 64 * 64;
-                data[i as usize] = 255;
+                data[i] = 255;
             } else if height == 1 {
                 let mut bitmask = node.children.as_ref().map(|children| children.iter()
                     .enumerate()
                     .filter_map(|(i, x)| x.as_ref().map(|_| i))
-                    .fold(0u64, |prev, i| ((1u64 << i) as u64) | prev)
+                    .fold(0u64, |prev, i| (1u64 << i) | prev)
                 ).unwrap_or_default();
 
                 if node.children.is_none() {
@@ -120,8 +120,8 @@ pub fn convert_single_chunk_node_to_sparse_image_binding_chunk(origin: vek::Vec3
     }
 
     SparseImageChunk {
-        origin: origin,
-        data: data,
+        origin,
+        data,
         full: false,
     }
 }
@@ -144,7 +144,7 @@ pub fn convert_to_sparse_image_chunks(nodes: &[FlatNode]) -> Vec<SparseImageChun
             continue;
         }
 
-        let size: u32 = 4u32.pow(height as u32);
+        let size: u32 = 4u32.pow(height);
 
         if height == 0 {
             // should never reach this???
@@ -201,7 +201,7 @@ pub fn convert_mips_to_nodes<const MIP_COUNT: usize>(starting_origin: vek::Vec3<
     let mut nodes = Vec::<FlatNode>::new();
 
     while let Some(NotSoSimpleTraversalNode { mip_index, index_within_mip, height, origin }) = queue.pop_front() {
-        let size: u32 = 4u32.pow(height as u32);
+        let size: u32 = 4u32.pow(height);
         let bounds = vek::Aabb::<u32> {
             min: origin,
             max: origin + size,

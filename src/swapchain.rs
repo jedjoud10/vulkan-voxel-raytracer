@@ -33,7 +33,7 @@ pub unsafe fn create_swapchain(
     let surface_formats: Vec<vk::SurfaceFormatKHR> = surface_loader
         .get_physical_device_surface_formats(physical_device, surface_khr)
         .unwrap();
-    let present = present_modes
+    let _present = present_modes
         .iter()
         .copied()
         .find(|&x| x == vk::PresentModeKHR::IMMEDIATE || x == vk::PresentModeKHR::MAILBOX)
@@ -78,7 +78,7 @@ pub unsafe fn create_swapchain(
 
 
 pub unsafe fn create_temporary_target_render_image(
-    instance: &ash::Instance,
+    _instance: &ash::Instance,
     surface_loader: &ash::khr::surface::Instance,
     surface_khr: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
@@ -116,7 +116,7 @@ pub unsafe fn create_temporary_target_render_image(
     let allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name: "Render Texture Image Allocation",
-            requirements: requirements,
+            requirements,
             linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
             location: gpu_allocator::MemoryLocation::GpuOnly,

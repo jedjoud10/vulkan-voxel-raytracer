@@ -1,5 +1,4 @@
 use fixedbitset::FixedBitSet;
-use smallvec::SmallVec;
 
 use crate::voxel::sparse::FlatNode;
 

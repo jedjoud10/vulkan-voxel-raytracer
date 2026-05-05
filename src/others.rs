@@ -18,10 +18,10 @@ pub unsafe fn create_descriptor_pool(device: &ash::Device) -> vk::DescriptorPool
         .max_sets(10)
         .pool_sizes(&descriptor_pool_sizes);
 
-    let descriptor_pool = device
+    
+    device
         .create_descriptor_pool(&descriptor_pool_create_info, None)
-        .unwrap();
-    descriptor_pool
+        .unwrap()
 }
 
 pub unsafe fn create_query_pool(
@@ -59,18 +59,18 @@ pub unsafe fn find_appropriate_queue_family_index(
 }
 
 pub unsafe fn find_async_compute_queue(
-    physical_device: vk::PhysicalDevice,
+    _physical_device: vk::PhysicalDevice,
     queue_family_properties: Vec<vk::QueueFamilyProperties>,
 ) -> usize {
     queue_family_properties
         .iter()
         .enumerate()
-        .position(|(i, props)| {
+        .position(|(_i, props)| {
             let graphics = props.queue_flags.contains(vk::QueueFlags::GRAPHICS);
             let compute = props.queue_flags.contains(vk::QueueFlags::COMPUTE);
             let transfer = props.queue_flags.contains(vk::QueueFlags::TRANSFER);
 
-            return !graphics & compute & !transfer;
+            !graphics & compute & !transfer
         })
         .unwrap()
 }
@@ -88,6 +88,6 @@ pub unsafe fn create_surface(
         None,
     )
     .unwrap();
-    let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
+    let surface_loader = ash::khr::surface::Instance::new(entry, instance);
     (surface_loader, surface)
 }

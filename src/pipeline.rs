@@ -162,11 +162,11 @@ pub unsafe fn create_render_compute_pipeline(
 
     // FIXME: this assumes that spec constant fields are ALL u32s
     let spec_constant_bytes = bytemuck::cast_slice::<u8, u32>(bytemuck::bytes_of(&constants));
-    let spec_constants = spec_constant_bytes.into_iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
+    let spec_constants = spec_constant_bytes.iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
 
-    let main_entry_point = create_single_entry_point_pipeline(device, &binder, render_compute_shader_module, "main", &render_compute_descriptor_set_layouts, push_constant_size, Some(&spec_constants));
+    let main_entry_point = create_single_entry_point_pipeline(device, binder, render_compute_shader_module, "main", &render_compute_descriptor_set_layouts, push_constant_size, Some(&spec_constants));
     
-    return MultiComputePipeline {
+    MultiComputePipeline {
         module: render_compute_shader_module,
         descriptor_set_layout: render_compute_descriptor_set_layouts,
         entry_points: [main_entry_point]
@@ -212,10 +212,10 @@ pub unsafe fn create_sky_pipeline(
     let spec_constants = spec_constant_fields.iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
 
 
-    let clouds_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "write_clouds", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
-    let skybox_entry_point = create_single_entry_point_pipeline(device, &binder, shader_module, "write_skybox", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
+    let clouds_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "write_clouds", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
+    let skybox_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "write_skybox", &render_compute_descriptor_set_layouts, Some(size), Some(&spec_constants));
     
-    return MultiComputePipeline {
+    MultiComputePipeline {
         module: shader_module,
         descriptor_set_layout: render_compute_descriptor_set_layouts,
         entry_points: [clouds_entry_point, skybox_entry_point],
@@ -371,9 +371,9 @@ pub unsafe fn create_single_entry_point_pipeline(
     };
 
     let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
-        .push_constant_ranges(&push_constant_ranges.as_slice())
+        .push_constant_ranges(push_constant_ranges.as_slice())
         .flags(vk::PipelineLayoutCreateFlags::empty())
-        .set_layouts(&descriptor_set_layouts);
+        .set_layouts(descriptor_set_layouts);
     
     let compute_pipeline_layout = device
         .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
@@ -395,7 +395,7 @@ pub unsafe fn create_single_entry_point_pipeline(
     
     crate::debug::set_object_name(compute_pipelines[0], binder, format!("entry point '{entry_point_name}' compute pipeline"));
 
-    return SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
+    SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
 }
 /*
 pub unsafe fn create_generate_voxel_compute_pipeline(

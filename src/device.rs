@@ -1,4 +1,3 @@
-use std::ffi::CStr;
 
 use ash::vk;
 
@@ -15,7 +14,7 @@ pub unsafe fn create_device_and_queue(
     let queue_family_index = others::find_appropriate_queue_family_index(
         physical_device,
         queue_family_properties,
-        &surface_loader,
+        surface_loader,
         surface_khr,
     ) as u32;
 

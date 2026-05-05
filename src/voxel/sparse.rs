@@ -1,14 +1,11 @@
-use std::{collections::{HashMap, VecDeque}, fmt, ops::ControlFlow, time::Instant};
+use std::{collections::VecDeque, ops::ControlFlow, time::Instant};
 use crate::utils::*;
 use ash::vk;
-use bit_vec::BitVec;
-use bytemuck::{Pod, Zeroable};
 use gpu_allocator::vulkan::Allocator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use serde::ser::{SerializeSeq, SerializeStruct};
 use crate::buffer::{self, Buffer};
 use super::{SVO_DEPTH, TOTAL_SIZE, BOTTOM_NODE, FULL_NODE};
-use super::chunk::{Chunk, ChunkData};
+use super::chunk::Chunk;
 
 pub struct SparseVoxelOctree {
     pub bitmask_buffer: Buffer,
@@ -20,7 +17,7 @@ pub struct SparseVoxelOctree {
 impl SparseVoxelOctree {
     pub unsafe fn new_with_root_node(
         device: &ash::Device,
-        mut allocator: &mut Allocator,
+        allocator: &mut Allocator,
         binder: &Option<ash::ext::debug_utils::Device>,
     ) -> Self {
         // each node contains a u64 bitmask that checks if any of its children are leaf nodes
@@ -28,9 +25,9 @@ impl SparseVoxelOctree {
         // it contains a bitmask of its children
         log::debug!("creating SVO...");
         let max_svo_element_size = 4096 * 64 * 16;
-        let aabb_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-        let bitmask_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u64>(), &binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
-        let index_buffer = buffer::create_buffer(&device, &mut allocator, max_svo_element_size * size_of::<u32>(), &binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let aabb_buffer = buffer::create_buffer(device, allocator, max_svo_element_size * size_of::<u64>(), binder, "sparse voxel octree aabb bounds", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let bitmask_buffer = buffer::create_buffer(device, allocator, max_svo_element_size * size_of::<u64>(), binder, "sparse voxel octree brick bitmasks", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        let index_buffer = buffer::create_buffer(device, allocator, max_svo_element_size * size_of::<u32>(), binder, "sparse voxel octree child indices", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
         
         Self {
             bitmask_buffer,
@@ -166,7 +163,7 @@ impl SparseVoxelOctree {
 
             if node.height > target_height {
                 current = Some(TopDownTraversalNode {
-                    index: child_index_absolute as usize,
+                    index: child_index_absolute,
                     height: node.height - 1,
                     origin: child_offset * size + node.origin,
                 });
@@ -217,7 +214,7 @@ impl SparseVoxelOctree {
 
             // set bottom most child as FULL
             if node.height == 0 && voxel {
-                nodes[child_index_absolute as usize].full = true;
+                nodes[child_index_absolute].full = true;
             }
             
             // remove bottom most child
@@ -230,7 +227,7 @@ impl SparseVoxelOctree {
             // if the parent (node.index) was full, then the just added node must ALSO be full so that we can recursively set its children as full until we reach the bottom
             if !voxel && nodes[node.index].full {
                 nodes[node.index].full = false;
-                nodes[child_index_absolute as usize].full = true;
+                nodes[child_index_absolute].full = true;
             }
 
             ControlFlow::Continue(())
@@ -243,7 +240,7 @@ impl SparseVoxelOctree {
             if voxel {
                 // recalculate node fullness based on children fullness
                 if let Some(children) = self.nodes[node.child_index_absolute].children.as_ref() {
-                    let full = children.iter().all(|child| child.as_ref().map(|c| self.nodes[*c as usize].full).unwrap_or_default());
+                    let full = children.iter().all(|child| child.as_ref().map(|c| self.nodes[*c ].full).unwrap_or_default());
                     self.nodes[node.child_index_absolute].full = full;
                 }
             } else {
@@ -256,21 +253,21 @@ impl SparseVoxelOctree {
         }
     }
 
-    pub unsafe fn rebuild(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, mut allocator: &mut Allocator) {
+    pub unsafe fn rebuild(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, allocator: &mut Allocator) {
         let res = convert_to_buffers(&self.nodes);
         self.apply_update_gpu_buffers(device, pool, queue, allocator, &res);
     }
 
-    pub unsafe fn apply_update_gpu_buffers(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, mut allocator: &mut Allocator, built: &SparseVoxelTreeBuildResultGpuBuffers) {
+    pub unsafe fn apply_update_gpu_buffers(&mut self, device: &ash::Device, pool: vk::CommandPool, queue: vk::Queue, allocator: &mut Allocator, built: &SparseVoxelTreeBuildResultGpuBuffers) {
         log::info!("writing new data to sparse voxel tree buffers...");
         let bitmasks_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.bitmasks.as_slice());
         let indices_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.indices.as_slice());
         let aabb_buffer_bytes = bytemuck::cast_slice::<_, u8>(built.aabbs.as_slice());
     
         // TODO: use the dedicated per-frame command buffer and a scratch buffer and avoid doing the device.wait_idle() inside these calls
-        buffer::write_to_buffer(device, pool, queue, self.bitmask_buffer.buffer, &mut allocator, bitmasks_buffer_bytes);
-        buffer::write_to_buffer(device, pool, queue, self.index_buffer.buffer, &mut allocator, indices_buffer_bytes);
-        buffer::write_to_buffer(device, pool, queue, self.aabb_buffer.buffer, &mut allocator, aabb_buffer_bytes);
+        buffer::write_to_buffer(device, pool, queue, self.bitmask_buffer.buffer, allocator, bitmasks_buffer_bytes);
+        buffer::write_to_buffer(device, pool, queue, self.index_buffer.buffer, allocator, indices_buffer_bytes);
+        buffer::write_to_buffer(device, pool, queue, self.aabb_buffer.buffer, allocator, aabb_buffer_bytes);
     }
     
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
@@ -388,7 +385,7 @@ pub fn convert_to_buffers(nodes: &[FlatNode]) -> SparseVoxelTreeBuildResultGpuBu
         let mut bitmask = node.children.as_ref().map(|children| children.iter()
             .enumerate()
             .filter_map(|(i, x)| x.as_ref().map(|_| i))
-            .fold(0u64, |prev, i| ((1u64 << i) as u64) | prev)
+            .fold(0u64, |prev, i| (1u64 << i) | prev)
         ).unwrap_or_default();
         
         let mut base_child_index = test_count + 1;

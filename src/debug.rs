@@ -39,7 +39,7 @@ pub unsafe fn create_debug_messenger(
     let debug_messenger;
     #[cfg(debug_assertions)]
     {
-        let debug_utils = ash::ext::debug_utils::Instance::new(&entry, &instance);
+        let debug_utils = ash::ext::debug_utils::Instance::new(entry, instance);
         let messenger = debug_utils
             .create_debug_utils_messenger(&create_debug_messenger_create_info(), None)
             .unwrap();
@@ -68,7 +68,7 @@ pub unsafe extern "system" fn debug_callback(
     _cvoid: *mut c_void,
 ) -> u32 {
     let callback_data = *p_callback_data;
-    let message_id_number: i32 = callback_data.message_id_number as i32;
+    let message_id_number: i32 = callback_data.message_id_number;
 
     let message_id_name = if callback_data.p_message_id_name.is_null() {
         c""
@@ -96,7 +96,7 @@ pub unsafe extern "system" fn debug_callback(
             message.to_str().unwrap(),
         ),
         INFO => {
-            if (message_id_number == 0x4fe1fef9) {
+            if message_id_number == 0x4fe1fef9  {
                 log::info!("{}", message.to_str().unwrap());
             } else {
                 log::info!(

@@ -19,24 +19,13 @@ mod others;
 mod constant_descriptor_sets;
 mod per_frame_data;
 
-use ash;
-use ash::vk;
 use clap::Parser;
-use gpu_allocator::vulkan::Allocation;
-use input::Button;
-use input::Input;
-use movement::Movement;
-use winit::event::MouseButton;
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::KeyCode;
-use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::{Window, WindowId};
-use statistics::Statistics;
+use winit::window::WindowId;
 use renderer::InternalApp;
 
 
@@ -137,8 +126,8 @@ impl ApplicationHandler for App {
 
     fn device_event(
         &mut self,
-        event_loop: &ActiveEventLoop,
-        device_id: winit::event::DeviceId,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
         let inner = self.internal.as_mut().unwrap();

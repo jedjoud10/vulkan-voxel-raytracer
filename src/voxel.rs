@@ -1,8 +1,8 @@
-use std::{ffi::CString, io::{Read, Write}, path::{Path, PathBuf}, str::FromStr};
+use std::io::Read;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, Allocator};
 use noise::NoiseFn;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{buffer::{self}};
 
 mod recursive;
@@ -10,7 +10,6 @@ mod sparse;
 mod util;
 mod chunk;
 
-use recursive::*;
 use sparse::*;
 use util::*;
 pub use util::{TOTAL_SIZE};
@@ -19,14 +18,14 @@ pub use sparse::SparseVoxelOctree;
 
 pub unsafe fn create_sparse_structures(
     device: &ash::Device,
-    mut allocator: &mut Allocator,
+    allocator: &mut Allocator,
     binder: &Option<ash::ext::debug_utils::Device>,
     queue: vk::Queue,
     pool: vk::CommandPool,
     queue_family_index: u32,
     force_regenerate: bool,
 ) -> (SparseVoxelOctree, SparseVoxelTexture) {
-    let mut svo = SparseVoxelOctree::new_with_root_node(device, &mut allocator, binder);
+    let mut svo = SparseVoxelOctree::new_with_root_node(device, allocator, binder);
 
     let cached_folder_path = dirs::data_dir()
         .map(|data_dir| data_dir.join("nodlemanstuff").join("vulkanvoxelraytracer"));
@@ -36,7 +35,7 @@ pub unsafe fn create_sparse_structures(
         .map(|data_dir| data_dir.join("map.data"));
 
     
-    let cached_file = cached_file_path.as_ref().map(|path| std::fs::File::open(path).ok()).flatten();
+    let cached_file = cached_file_path.as_ref().and_then(|path| std::fs::File::open(path).ok());
 
     if let Some(cached_file) = cached_file && !force_regenerate {
         // load data from file
@@ -48,7 +47,7 @@ pub unsafe fn create_sparse_structures(
         let mut vec = Vec::<u8>::new();
         zlib_decoder.read_to_end(&mut vec).unwrap();
         let res = minicbor::decode::<SparseVoxelTreeBuildResultGpuBuffers>(&vec).unwrap();
-        svo.apply_update_gpu_buffers(device, pool, queue, &mut allocator, &res);
+        svo.apply_update_gpu_buffers(device, pool, queue, allocator, &res);
     } else {
         // regenerate chunks and save to file
         log::warn!("cache file not found (or was forced to regenerate), regenerating chunks...");
@@ -64,7 +63,7 @@ pub unsafe fn create_sparse_structures(
 
             let mut voxel_bit_set = fixedbitset::FixedBitSet::with_capacity(64*64*64);
                         
-            for index in (0..(64*64*64)) {
+            for index in 0..(64*64*64)  {
                 let local_position = util::index_to_offset(index, 64);
                 let world_position = local_position + chunk_position * 64;
                 let pos = world_position.as_::<f64>();
@@ -93,7 +92,7 @@ pub unsafe fn create_sparse_structures(
 
         if let Some(path) = cached_file_path {
             log::warn!("{}", path.as_os_str().to_str().unwrap());
-            std::fs::create_dir_all(&cached_folder_path.unwrap()).unwrap();
+            std::fs::create_dir_all(cached_folder_path.unwrap()).unwrap();
             let file = std::fs::File::create(&path).unwrap();
             let zlib_encoder = flate2::write::ZlibEncoder::new(file, flate2::Compression::fast());
             let mut writer = minicbor::encode::write::Writer::new(zlib_encoder);
@@ -107,7 +106,7 @@ pub unsafe fn create_sparse_structures(
     // FIXME: what the fuck do we do with this fuckass sparse texture
     let chunks = vec![];
     //let chunks = convert_to_sparse_image_chunks(&svo.nodes);
-    let svt = create_sparse_voxel_texture(&device, &mut allocator, binder, queue, pool, queue_family_index, chunks);
+    let svt = create_sparse_voxel_texture(device, allocator, binder, queue, pool, queue_family_index, chunks);
     log::info!("created sparse voxel texture");
 
     (svo, svt)
@@ -194,7 +193,7 @@ unsafe fn create_sparse_voxel_texture(
         panic!();
     };
 
-    let extent_granularity = sparse_requirement.format_properties.image_granularity;
+    let _extent_granularity = sparse_requirement.format_properties.image_granularity;
     
     // fuck it
     //let axis_granularity = extent_granularity.width.max(extent_granularity.height).max(extent_granularity.depth);
@@ -302,7 +301,7 @@ unsafe fn create_sparse_voxel_texture(
     // create allocation for metadata image and upload stuff to it
     let metadata_image_allocation = allocator
         .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
-            name: &format!("Metadata Image Allocation"),
+            name: "Metadata Image Allocation",
             requirements: metadata_image_requirements,
             linear: false,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
@@ -315,7 +314,7 @@ unsafe fn create_sparse_voxel_texture(
     let (metadata_staging_buffer, metadata_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &metadata_image_bytes);
 
     // create staging buffer to copy sparse texel data 
-    let opt_sparse_staging_buffer_and_allocation_and_copies = if total_data_to_copy.len() > 0 {
+    let opt_sparse_staging_buffer_and_allocation_and_copies = if !total_data_to_copy.is_empty() {
         let (sparse_staging_buffer, sparse_staging_buffer_alloc) = buffer::create_staging_buffer(device, allocator, &total_data_to_copy);
 
         // create the actual memory copies depending on binding chunks
@@ -381,7 +380,7 @@ unsafe fn create_sparse_voxel_texture(
 
     // do the sparse staging buffer to sparse image copy
     if let Some((sparse_staging_buffer, _, buffer_image_copies)) = opt_sparse_staging_buffer_and_allocation_and_copies.as_ref() {
-        device.cmd_copy_buffer_to_image(cmd, *sparse_staging_buffer, sparse_image, vk::ImageLayout::GENERAL, &buffer_image_copies);
+        device.cmd_copy_buffer_to_image(cmd, *sparse_staging_buffer, sparse_image, vk::ImageLayout::GENERAL, buffer_image_copies);
     }
 
     // do the metadata staging buffer to metadata image copy

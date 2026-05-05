@@ -6,9 +6,8 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    pub fn update(&mut self, delta: f32) -> bool {
-        return false;
-        self.accumulator += delta;
+    pub fn update(&mut self, _delta: f32) -> bool {
+        self.accumulator += _delta;
 
         // For now we assume we can execute at most one tick per frame
         // TODO: implement multiple ticks per frame, but this might causes some synhronization difficulties since
@@ -19,6 +18,6 @@ impl Ticker {
             return true;
         }
 
-        return false;
+        false
     }
 }

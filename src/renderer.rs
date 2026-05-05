@@ -1,6 +1,4 @@
-use ash;
 use ash::vk;
-use clap::Parser;
 use gpu_allocator::vulkan::Allocation;
 use crate::input::Button;
 use crate::input::Input;
@@ -8,20 +6,15 @@ use crate::movement::Movement;
 use winit::event::MouseButton;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
-use std::time::Instant;
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::KeyCode;
 use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::{Window, WindowId};
+use winit::window::Window;
 use crate::statistics::Statistics;
 use crate::asset;
 
 use crate::swapchain;
-use crate::statistics;
 use crate::ticker;
-use crate::input;
 use crate::pipeline;
 use crate::skybox;
 use crate::voxel;
@@ -29,7 +22,6 @@ use crate::buffer;
 use crate::instance;
 use crate::physical_device;
 use crate::device;
-use crate::movement;
 use crate::debug;
 use crate::others;
 use crate::per_frame_data::PerFrameData;
@@ -113,9 +105,8 @@ impl InternalApp {
 
         let instance = instance::create_instance(&entry, raw_display_handle);
         log::info!("created instance");
-        let debug_messenger = debug::create_debug_messenger(&entry, &instance).map(|x| {
+        let debug_messenger = debug::create_debug_messenger(&entry, &instance).inspect(|_x| {
             log::info!("created debug utils messenger");
-            x
         });
 
         let (surface_loader, surface_khr) = others::create_surface(&instance, &entry, &window);
@@ -168,7 +159,7 @@ impl InternalApp {
             gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
-                physical_device: physical_device.clone(),
+                physical_device,
                 debug_settings: gpu_allocator::AllocatorDebugSettings {
                     log_leaks_on_shutdown: false,
                     log_frees: false,
@@ -244,10 +235,10 @@ impl InternalApp {
             pixelated_shadows: if args.pixelated_shadows { 1 } else { 0 }, 
             group_size: 2u32.pow(args.group_size_exp),
         };
-        let render_compute_pipeline = pipeline::create_render_compute_pipeline(&*assets["raytracer.spv"], &device, &debug_marker, spec_constants);
+        let render_compute_pipeline = pipeline::create_render_compute_pipeline(assets["raytracer.spv"], &device, &debug_marker, spec_constants);
         log::info!("created render compute pipeline");
 
-        let sky_compute_pipeline = pipeline::create_sky_pipeline(&*assets["sky_compute.spv"], &device, &debug_marker);
+        let sky_compute_pipeline = pipeline::create_sky_pipeline(assets["sky_compute.spv"], &device, &debug_marker);
         log::info!("created sky compute pipeline");
 
         let (svo, svt) = voxel::create_sparse_structures(
@@ -272,7 +263,7 @@ impl InternalApp {
         log::info!("created skybox");
 
         let mut frames_in_flight = Vec::<PerFrameData>::new();
-        for ((rt_image, rt_image_allocation), swapchain_image) in rt_images.into_iter().zip(images.into_iter()) {
+        for ((rt_image, rt_image_allocation), swapchain_image) in rt_images.into_iter().zip(images) {
             frames_in_flight.push(PerFrameData::create_per_frame_data(&device, pool, swapchain_format, descriptor_pool, &render_compute_pipeline, rt_image, rt_image_allocation, swapchain_image));
         }
         log::info!("created frames in flight structures");
@@ -280,7 +271,7 @@ impl InternalApp {
         let lights_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<vek::Vec4<f32>>() * 10, &debug_marker, "lights buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
         let mut lights = Vec::<vek::Vec4<f32>>::new();
 
-        for i in 0..10 {
+        for _i in 0..10 {
             let x = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
             let y = rand::random_range(0f32..(voxel::TOTAL_SIZE as f32));
             let z = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
@@ -514,7 +505,7 @@ impl InternalApp {
             )
             .unwrap();
 
-        let start = std::time::Instant::now();
+        let _start = std::time::Instant::now();
 
         if suboptimal || self.was_resized {
             log::debug!("suboptimal: {suboptimal}");
@@ -682,7 +673,7 @@ impl InternalApp {
             matrix: self.movement.proj_matrix * self.movement.view_matrix,
             position: self.movement.position.with_w(0f32),
             sun: self.sun.normalized().with_w(0f32),
-            debug_type: self.debug_type as u32,
+            debug_type: self.debug_type,
             time: elapsed,
         };
 
@@ -814,7 +805,7 @@ impl InternalApp {
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
 
-        let end = std::time::Instant::now();
+        let _end = std::time::Instant::now();
 
         //log::debug!("CPU thread took: {}us", (end-start).as_micros());
 

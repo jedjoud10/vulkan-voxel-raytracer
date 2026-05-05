@@ -37,7 +37,7 @@ impl Movement {
             position: vek::Vec3::new(40.5f32, 80f32, 40.5f32),
             rotation : vek::Quaternion::rotation_y(-130f32.to_radians()),
             fixed_mode_snapshot_index: None,
-            snapshots: snapshots,
+            snapshots,
             //position: vek::Vec3::new(crate::voxel::SIZE as f32 / 2f32, 60f32, crate::voxel::SIZE as f32 / 2f32),
             ..Default::default()
         }
@@ -144,14 +144,13 @@ impl Movement {
         }
 
         // iterate over snapshots
-        if let Some(ref mut idx) = self.fixed_mode_snapshot_index && input.get_button(KeyCode::KeyO).pressed() {
-            if self.snapshots.len() > 0 {
+        if let Some(ref mut idx) = self.fixed_mode_snapshot_index && input.get_button(KeyCode::KeyO).pressed()
+            && !self.snapshots.is_empty() {
                 *idx += 1;
-                *idx = *idx % self.snapshots.len();
+                *idx %= self.snapshots.len();
                 self.position = self.snapshots[*idx].position;
                 self.rotation = self.snapshots[*idx].rotation;
             }
-        }
     }
     
     pub fn forward(&self) -> vek::Vec3<f32> {
