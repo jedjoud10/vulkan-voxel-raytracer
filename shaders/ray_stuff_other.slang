@@ -287,7 +287,7 @@ DdaTraversalOutput dda_trace_recurse<let K : int, let END : int, let MAX_DISTANC
                 // if something goes wrong add it again 
                 //return DdaTraversalOutput(true, world, origin, distance_to_surface - EPS, face);
                 int3 tmp_sign = max(0, -dir_sign);
-                return DdaTraversalOutput(true, origin[face] + tmp_sign[face] * (voxel_size-1), distance_to_surface - EPS, face);
+                return DdaTraversalOutput(true, origin[face], distance_to_surface - EPS, face);
             }
         }
 

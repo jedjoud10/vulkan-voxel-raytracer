@@ -18,10 +18,6 @@ SamplerCube<float4> skybox_sampler;
 [[vk::binding(2, 1)]]
 Sampler2D<float4> clouds_sampler;
 
-
-
-
-
 // https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
 Optional<float> ray_plane_intersect_generic(float3 ray_dir, float3 ray_pos, float3 plane_normal, float3 plane_pos) {
     float denom = dot(ray_dir, plane_normal);
@@ -107,9 +103,6 @@ float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> 
     return clouds_colour_opacity;
 }
 
-
-
-
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void write_render_texture(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform uint debug_type, uniform float time) {
@@ -132,33 +125,30 @@ void write_render_texture(uint3 id: SV_DispatchThreadID, uniform float2 screen, 
     float3 colour = 0;
     
     if (hit) {
-        float32_t distance = reinterpret<float32_t>(loaded.x);
+        //float32_t distance = reinterpret<float32_t>(loaded.x);
         uint32_t face = (flags >> 1) & 0b11;
+        float3 normal = get_face_normal(face, sign(ray_dir));
         uint32_t corrected_world_axis_pos = (flags >> 3) & 0b1111111111;
+
+        // we can solve for the missing UV coordinates without needing the distance!!!
+        float3 k = 0;
+        k[face] = corrected_world_axis_pos;
+        float32_t distance = ray_plane_intersect_generic(ray_dir, ray_pos, normal, k+max(normal, 0)).value;
 
         float3 world_pos = ray_pos + ray_dir * distance;
         uint3 block_pos = floor(world_pos);
-        //world_pos = get_accurate_world_position_with_face(world_pos, )
         
-        //int3 tmp_sign = max(0, -dir_sign);
         block_pos[face] = corrected_world_axis_pos;
         world_pos[face] = corrected_world_axis_pos;
-        //float3 world = world_pos;
-        
-        float tmin = 0;
-        ray_box_intersection(inv_dir, dir_sign, ray_pos, block_pos, block_pos + 1, tmin);
-        float3 world = ray_pos + ray_dir * (tmin - EPS);
-        world[face] = corrected_world_axis_pos;
-        
-        float3 normal = get_face_normal(face, sign(ray_dir));
+        float3 world = world_pos;
 
-        normal = normalize(normal + (hash33(floor(world * 16)) - 0.5) * 0.3);
-
-        float3 diffuse = 1.0;
+        //normal = normalize(normal + (hash33(floor(world * 16)) - 0.5) * 0.3);
+        float3 diffuse = per_block_unique_colour(block_pos);
         float roughness = 0.50;
         float metallic = 0;
         float ao = 1.0;
         float shadow = 1.0;
+        //float shadow = (1 - ((flags >> 13) & 1)) * (1-clouds(sun.xyz, sun.xyz, world_pos, clouds_sampler).a);
 
         PbrSurfaceData pbr_surface_data = PbrSurfaceData(world, diffuse, normal, roughness, metallic, ao, shadow);
         CameraData camera_data = CameraData(-ray_dir);
@@ -167,8 +157,24 @@ void write_render_texture(uint3 id: SV_DispatchThreadID, uniform float2 screen, 
         SunData sun_data = SunData(sun.xyz, sun.y > 0 ? (3.2 * sun_colour) : 0);
         SkyData sky_data = SkyData(skybox_sampler, clouds_sampler);
 
-        colour = (block_pos % 16) / 16.0;
-        //colour = lighting(pbr_surface_data, camera_data, sun_data, sky_data);
+        //colour = (block_pos % 16.0) / 16.0;
+        colour = lighting(pbr_surface_data, camera_data, sun_data, sky_data);
+
+        colour = ((flags >> 13) & 0b1);
+
+        /*
+        for (int l = 0; l < 100; l++) {
+            float3 light_pos = lights_buffer[l].xyz;
+            float3 light_towards_position = world - light_pos;
+            float d = length(light_towards_position);
+            if (d < 10) {
+                light_towards_position = normalize(light_towards_position);
+                float n_dot_l = saturate(dot(normal, -normalize(light_towards_position)));
+                float strength = (1 / (d*d)) * smoothstep(0, 1, 10-d);
+                colour += n_dot_l * strength * hash33(l * 3.21312) * 0.3; 
+            }
+        }
+        */
     } else {
         float4 clouds_colour_opacity = clouds(sun.xyz, ray_dir, ray_pos, clouds_sampler);
         float3 sky_colour = skybox_sampler.Sample(ray_dir).xyz;

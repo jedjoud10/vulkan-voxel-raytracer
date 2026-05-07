@@ -75,7 +75,6 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     Statistics stats = Statistics(0, 0);
     
     var primary_ray = trace_shi<int.maxValue>(ray_pos, ray_dir, svo, stats);
-
     uint32_t distance = reinterpret<uint32_t>(primary_ray.distance);
     uint32_t flags = 0;
     
@@ -83,8 +82,26 @@ void main(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<f
     flags |= (uint32_t)primary_ray.hit; // 1 bit
     flags |= primary_ray.face << 1; // 2 bits
     flags |= (primary_ray.specific_block_axis_thing & 0b1111111111) << 3; // 10 bits for specific axis value
-    
+
+    if (primary_ray.hit) {
+        float3 world_pos = ray_pos + ray_dir * primary_ray.distance;
+
+        // why does this break?
+        //world_pos[primary_ray.face] = primary_ray.specific_block_axis_thing;
+
+        var shadow_ray_hit = trace_shi<int.maxValue>(world_pos + sun.xyz * 0.001, sun.xyz, svo, stats).hit;
+        //flags |= shadow_ray_hit << 13;
+
+
+        float3 normal = get_interesting_normal(world_pos, get_face_normal(primary_ray.face, sign(ray_dir)));
+        float3 reflected = reflect(ray_dir, normal);
+        var secondary_ray = trace_shi<int.maxValue>(world_pos + reflected*0.05, reflected, svo, stats);
+        flags |= secondary_ray.hit << 13;
+        flags |= secondary_ray.face << 15; // 2 bits
+        flags |= (secondary_ray.specific_block_axis_thing & 0b1111111111) << 17; // 10 bits for specific axis value
+    }
     output[id.xy] = uint32_t2(distance, flags);
+    //output[id.xy] = block_pos.x | block_pos.y << 10 | block_pos.z << 20 | (uint32_t1)primary_ray.hit << 30;
     return;
 }
 

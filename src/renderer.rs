@@ -1,5 +1,7 @@
 use ash::vk;
 use gpu_allocator::vulkan::Allocation;
+use rand::RngExt;
+use rand::SeedableRng;
 use crate::input::Button;
 use crate::input::Input;
 use crate::movement::Movement;
@@ -58,7 +60,7 @@ pub struct InternalApp {
     // pipelines
     render_compute_pipeline: pipeline::RenderPipeline,
     sky_compute_pipeline: pipeline::SkyPipeline,
-    compositing_compute_pipeline: pipeline::CompositingPipeline,
+    compositing_compute_pipeline: pipeline::LightingPipeline,
     
     // descriptors & frames in flight
     frames_in_flight: Vec<PerFrameData>,
@@ -97,7 +99,8 @@ impl InternalApp {
         let mut assets = HashMap::<&str, &[u32]>::new();
         asset!("raytracer.spv", assets);
         asset!("sky_compute.spv", assets);
-        asset!("compositor_compute.spv", assets);
+        asset!("lighting_compute.spv", assets);
+        asset!("post_process_compute.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -232,7 +235,7 @@ impl InternalApp {
         let sky_compute_pipeline = pipeline::create_sky_pipeline(assets["sky_compute.spv"], &device, &debug_marker);
         log::info!("created sky compute pipeline");
 
-        let compositing_compute_pipeline = pipeline::create_compositing_pipeline(assets["compositor_compute.spv"], &device, &debug_marker);
+        let compositing_compute_pipeline = pipeline::create_lighting_pipeline(assets["lighting_compute.spv"], &device, &debug_marker);
         log::info!("created compositing compute pipeline");
 
         let (svo, svt) = voxel::create_sparse_structures(
@@ -265,10 +268,12 @@ impl InternalApp {
         crate::per_frame_data::transfer_rt_images(&device, queue_family_index, &frames_in_flight, pool, queue);
         log::info!("created frames in flight structures");
 
-        let lights_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<vek::Vec4<f32>>() * 10, &debug_marker, "lights buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
+        const NUM_LIGHTS: usize = 100;
+
+        let lights_buffer = buffer::create_buffer(&device, &mut allocator, size_of::<vek::Vec4<f32>>() * NUM_LIGHTS, &debug_marker, "lights buffer", vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
         let mut lights = Vec::<vek::Vec4<f32>>::new();
 
-        for _i in 0..10 {
+        for _i in 0..NUM_LIGHTS {
             let x = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
             let y = rand::random_range(0f32..(voxel::TOTAL_SIZE as f32));
             let z = rand::random_range((voxel::TOTAL_SIZE as f32 / 2.0f32 - 10f32)..(voxel::TOTAL_SIZE as f32 / 2.0f32 + 10f32));
@@ -459,9 +464,16 @@ impl InternalApp {
         }
 
 
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(421);
 
         for (i, light) in self.lights.iter_mut().enumerate() { 
-            let tmp = vek::Lerp::lerp(light.xyz(), self.movement.position + vek::Vec3::new((i as f32 + elapsed).sin(), 0.0, (i as f32 + elapsed).cos()) * 5.5f32, 3.5 * delta);
+            let axis = vek::Vec3::new(rng.random_range(-1f32..1f32), rng.random_range(-1f32..1f32), rng.random_range(-1f32..1f32));
+            
+            let disk_matrix = vek::Mat4::rotation_3d(elapsed, axis);
+
+            let target_position = self.movement.position + disk_matrix.mul_point(vek::Vec3::unit_x()) * 5.0f32;
+
+            let tmp = vek::Lerp::lerp(light.xyz(), target_position, 3.5 * delta);
             *light = vek::Vec4::from_point(tmp);
         }
 
@@ -627,10 +639,10 @@ impl InternalApp {
         let skybox_image_barrier = vk::ImageMemoryBarrier2::default()
             .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::GENERAL)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::NONE)
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
             .image(self.skybox.skybox_image)
@@ -639,9 +651,9 @@ impl InternalApp {
             .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::GENERAL)
             .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
             .image(*rendered_image)
@@ -652,13 +664,15 @@ impl InternalApp {
             .src_access_mask(vk::AccessFlags2::NONE)
             .dst_access_mask(vk::AccessFlags2::SHADER_WRITE)
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
             .image(rt_image)
             .subresource_range(subresource_range);
         let image_memory_barriers = [src_shader_write_to_shader_read, rt_image_blit_src_layout_transition_to_shader_write, skybox_image_barrier];
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        
+        // wtf? no validation errors when we remove this barrier??? why????
         self.device.cmd_pipeline_barrier2(cmd, &dep);
 
         // execute composition pass

@@ -17,7 +17,7 @@ impl ConstantDescriptorSets {
         descriptor_pool: vk::DescriptorPool,
         render_compute_pipeline: &pipeline::RenderPipeline,
         sky_compute_pipeline: &pipeline::SkyPipeline,
-        compositor_compute_pipeline: &pipeline::CompositingPipeline,
+        compositor_compute_pipeline: &pipeline::LightingPipeline,
         skybox: &skybox::Skybox,
         svt: &voxel::SparseVoxelTexture,
         svo: &voxel::SparseVoxelOctree,

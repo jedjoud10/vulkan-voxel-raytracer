@@ -33,6 +33,11 @@ float3 get_accurate_world_position_with_face(float3 world, uint3 block_pos, int 
     return world;
 }
 
+// MUST be shared between the ray tracer and the shader, otherwise their ray directions will mismatch
+float3 get_interesting_normal(float3 world, float3 normal) {
+    return normal;
+}
+
 public static const int3[] FACE_NORMALS = {
     int3(1, 0, 0),
     int3(-1, 0, 0),

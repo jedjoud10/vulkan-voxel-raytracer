@@ -31,7 +31,7 @@ impl PerFrameData {
         pool: vk::CommandPool,
         descriptor_pool: vk::DescriptorPool,
         render_compute_pipeline: &pipeline::RenderPipeline,
-        compositing_compute_pipeline: &pipeline::CompositingPipeline,
+        compositing_compute_pipeline: &pipeline::LightingPipeline,
         swapchain_image: vk::Image
     ) -> Self {
         let present_complete_semaphore = device
