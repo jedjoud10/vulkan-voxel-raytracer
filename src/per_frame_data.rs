@@ -68,6 +68,7 @@ impl PerFrameData {
             .allocate_descriptor_sets(&descriptor_set_allocate_info)
             .unwrap();
 
+        // TODO: don't fucking create this per frame you absolute fucking DUMBASS
         let bloom_sampler_create_info = vk::SamplerCreateInfo::default()
             .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
             .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)

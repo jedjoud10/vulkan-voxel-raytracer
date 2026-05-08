@@ -140,6 +140,11 @@ pub unsafe fn create_render_compute_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1);
+    let svt_sampler = vk::DescriptorSetLayoutBinding::default()
+        .binding(8)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1);
     let bindings = [
         svt_image,
         svt_meta_image,
@@ -149,6 +154,7 @@ pub unsafe fn create_render_compute_pipeline(
         lights_buffer,
         skybox_sampler,
         clouds_sampler,
+        svt_sampler,
     ];
     let second_descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::empty())

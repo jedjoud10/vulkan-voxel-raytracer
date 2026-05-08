@@ -13,9 +13,16 @@ RWTexture2D<float4> render_target;
 [[vk::binding(2, 0)]]
 Sampler2D<float4> entire_bloom_image;
 
+//#define SHORT_CIRCUIT_NO_TONEMAPPING
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void write_render_texture(uint3 id: SV_DispatchThreadID, uniform float2 screen, uniform matrix<float,4,4> mat, uniform float4 position, uniform float4 sun, uniform uint debug_type, uniform float time) {
+#ifdef SHORT_CIRCUIT_NO_TONEMAPPING
+    render_target[id.xy] = pre_compose[id.xy];
+    return;
+#endif
+    
     float2 screen_uvs_negative_one_to_one = (float2)id.xy / screen;
     screen_uvs_negative_one_to_one *= 2.0;
     screen_uvs_negative_one_to_one -= 1.0;
@@ -54,7 +61,7 @@ void write_render_texture(uint3 id: SV_DispatchThreadID, uniform float2 screen, 
     
     float3 bloom = entire_bloom_image.SampleLevel(screen_uvs, 2.0).xyz;
 
-    float3 col = pow(aces(final_colour + bloom * 0.1), 1/2.2);
+    float3 col = pow(aces(final_colour + bloom * 0.05), 1/2.2);
     
     //float vignette = saturate(length(abs(screen_uvs_negative_one_to_one)) * 0.8 - 0.8);
     //col = lerp(col, 0.0, vignette);
@@ -79,7 +86,7 @@ void bloom_downsample(uint3 id: SV_DispatchThreadID, uniform float2 previous_blo
             float2 uvs = ((float2)(id.xy * 2) + float2(x,y) + 1) / previous_bloom_mip_resolution;
             float4 loaded = previous_bloom_mip.Sample(uvs);
 
-            if (length(loaded) > 0.3) {
+            if (length(loaded) > 0.6) {
                 sum += clamp(loaded, 0, 1000);
             }
         }

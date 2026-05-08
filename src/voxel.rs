@@ -128,10 +128,18 @@ pub struct SparseVoxelTexture {
     pub metadata_image: vk::Image,
     pub metadata_image_view: vk::ImageView,
     pub metadata_image_allocation: Allocation,
+
+    pub sampled_sparse_image_view: vk::ImageView,
+
+    pub sparse_partial_image_chunks: Vec<PartialSparseImageChunk>,
+    pub sampled_sparse_image_sampler: vk::Sampler,
 }
 
 impl SparseVoxelTexture {
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
+        device.destroy_image_view(self.sampled_sparse_image_view, None);
+        device.destroy_sampler(self.sampled_sparse_image_sampler, None);
+
         device.destroy_image_view(self.sparse_image_view, None);
         device.destroy_image(self.sparse_image, None);
         
@@ -144,6 +152,10 @@ impl SparseVoxelTexture {
         allocator.free(self.metadata_image_allocation).unwrap();
     }
 }
+
+const SPARSE_VOXEL_SAMPLED_IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
+const SPARSE_VOXEL_IMAGE_FORMAT: vk::Format = vk::Format::R8G8B8A8_UINT;
+const SPARSE_VOXEL_METADATA_IMAGE_FORMAT: vk::Format = vk::Format::R8_UINT;
 
 unsafe fn create_sparse_voxel_texture(
     device: &ash::Device,
@@ -163,7 +175,7 @@ unsafe fn create_sparse_voxel_texture(
             height: TOTAL_SIZE,
             depth: TOTAL_SIZE,
         })
-        .format(vk::Format::R8_UINT)
+        .format(SPARSE_VOXEL_IMAGE_FORMAT)
         .image_type(vk::ImageType::TYPE_3D)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .mip_levels(1)
@@ -220,7 +232,7 @@ unsafe fn create_sparse_voxel_texture(
             height: axis_num_bind_chunks,
             depth: axis_num_bind_chunks,
         })
-        .format(vk::Format::R8_UINT)
+        .format(SPARSE_VOXEL_METADATA_IMAGE_FORMAT)
         .image_type(vk::ImageType::TYPE_3D)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .mip_levels(1)
@@ -261,6 +273,8 @@ unsafe fn create_sparse_voxel_texture(
 
 
     // create backing allocations for the binding chunks  
+    log::debug!("allocating backing GPU memory for sparse image binding chunks...");
+    let mut sparse_partial_image_chunks = Vec::<PartialSparseImageChunk>::new();
     for SparseImageChunk { origin, data, full } in chunks.iter() {
         if *full {
             // just set metadata, don't allocate anything
@@ -271,7 +285,7 @@ unsafe fn create_sparse_voxel_texture(
             let bind_chunk_requirement = vk::MemoryRequirements::default()
                 .alignment(requirements.alignment)
                 .memory_type_bits(requirements.memory_type_bits)
-                .size(bind_chunk_volume as u64);
+                .size(bind_chunk_volume as u64 * 4);
 
             let allocation = allocator
                 .allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
@@ -304,10 +318,12 @@ unsafe fn create_sparse_voxel_texture(
             binding_chunks.push((*origin, offset_in_staging_buffer));
             offset_in_staging_buffer += data.len();
 
+
+            sparse_partial_image_chunks.push(PartialSparseImageChunk { origin: *origin });
         }
         
     }
-    log::info!("created memory allocations for {} sparse chunks for sparse voxel texture", chunks.len());
+    log::info!("created backing GPU allocations for {} sparse chunks for sparse voxel texture", chunks.len());
 
     
     // create allocation for metadata image and upload stuff to it
@@ -431,7 +447,7 @@ unsafe fn create_sparse_voxel_texture(
     let sparse_image_view_create_info = vk::ImageViewCreateInfo::default()
         .components(vk::ComponentMapping::default())
         .flags(vk::ImageViewCreateFlags::empty())
-        .format(vk::Format::R8_UINT)
+        .format(SPARSE_VOXEL_IMAGE_FORMAT)
         .image(sparse_image)
         .subresource_range(subresource_range)
         .view_type(vk::ImageViewType::TYPE_3D);
@@ -439,16 +455,38 @@ unsafe fn create_sparse_voxel_texture(
         .create_image_view(&sparse_image_view_create_info, None)
         .unwrap();
 
+    let sampled_sparse_image_view_create_info = vk::ImageViewCreateInfo::default()
+        .components(vk::ComponentMapping::default())
+        .flags(vk::ImageViewCreateFlags::empty())
+        .format(SPARSE_VOXEL_SAMPLED_IMAGE_FORMAT)
+        .image(sparse_image)
+        .subresource_range(subresource_range)
+        .view_type(vk::ImageViewType::TYPE_3D);
+    let sampled_sparse_image_view = device
+        .create_image_view(&sampled_sparse_image_view_create_info, None)
+        .unwrap();
+
     let metadata_image_view_create_info = vk::ImageViewCreateInfo::default()
         .components(vk::ComponentMapping::default())
         .flags(vk::ImageViewCreateFlags::empty())
-        .format(vk::Format::R8_UINT)
+        .format(SPARSE_VOXEL_METADATA_IMAGE_FORMAT)
         .image(metadata_image)
         .subresource_range(subresource_range)
         .view_type(vk::ImageViewType::TYPE_3D);
     let metadata_image_view = device
         .create_image_view(&metadata_image_view_create_info, None)
         .unwrap();
+
+    let sampler_create_info = vk::SamplerCreateInfo::default()
+        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+        .min_filter(vk::Filter::LINEAR)
+        .mag_filter(vk::Filter::LINEAR)
+        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+        .max_lod(100f32)
+        .min_lod(0f32);
+    let sampled_sparse_image_sampler = device.create_sampler(&sampler_create_info, None).unwrap();
 
     SparseVoxelTexture {
         sparse_image,
@@ -457,5 +495,8 @@ unsafe fn create_sparse_voxel_texture(
         metadata_image,
         metadata_image_view,
         metadata_image_allocation,
+        sparse_partial_image_chunks,
+        sampled_sparse_image_view,
+        sampled_sparse_image_sampler
     }
 }

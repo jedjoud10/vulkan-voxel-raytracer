@@ -101,6 +101,7 @@ impl InternalApp {
         asset!("raytracer.spv", assets);
         asset!("sky_compute.spv", assets);
         asset!("post_process_compute.spv", assets);
+        asset!("voxel_interesting_compute.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -286,7 +287,7 @@ impl InternalApp {
         buffer::write_to_buffer(&device, pool, queue, lights_buffer.buffer, &mut allocator, bytemuck::cast_slice(lights.as_slice()));
         log::info!("created lights buffer");
 
-        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
+        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &voxel_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
         log::info!("created constant descriptor sets");
 
         let query_pool = others::create_query_pool(&device);
@@ -419,7 +420,10 @@ impl InternalApp {
             self.stats.start_benchmarking(self.frame_count);
         }
         if self.input.get_button(Button::Keyboard(KeyCode::KeyH)).pressed() {
-            self.debug_type = (self.debug_type + 1) % 6;
+            self.debug_type = (self.debug_type as i32 + 1).rem_euclid(6) as u32;
+        }
+        if self.input.get_button(Button::Keyboard(KeyCode::KeyG)).pressed() {
+            self.debug_type = (self.debug_type as i32 - 1).rem_euclid(6) as u32;
         }
         if self.input.get_button(Button::Keyboard(KeyCode::KeyJ)).pressed() {
             let report = self.allocator.generate_report();
@@ -448,7 +452,6 @@ impl InternalApp {
             per_frame_descriptor_sets,
             bloom_image,
             bloom_mip_image_views,
-            bloom_sampler,
             ..
         } = &self.frames_in_flight[frame_index as usize];
 
@@ -517,6 +520,36 @@ impl InternalApp {
             .unwrap();
         self.device.cmd_reset_query_pool(cmd, self.query_pool, 0, 2);
 
+        if !self.svt.sparse_partial_image_chunks.is_empty() {
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.voxel_compute_pipeline.entry_points[0].pipeline_layout,
+                0,
+                &[constant_descriptor_sets.voxel_compute_pipeline_descriptor_set],
+                &[],
+            );
+            self.device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                self.voxel_compute_pipeline.entry_points[0].pipeline,
+            );
+        
+            let target_chunk_idfk = &self.svt.sparse_partial_image_chunks[self.frame_count as usize % self.svt.sparse_partial_image_chunks.len()];
+            let push_constants = vek::Vec4::<u32>::from_point(target_chunk_idfk.origin);
+            let raw = bytemuck::bytes_of(&push_constants);
+        
+            self.device.cmd_push_constants(
+                cmd,
+                self.voxel_compute_pipeline.entry_points[0].pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                raw,
+            );
+        
+            self.device.cmd_dispatch(cmd, 8, 8, 8);
+        }
+
         //self.sun = vek::Vec3::new((elapsed * 0.1f32).sin(), (elapsed * 0.05).sin(), (elapsed * 0.1f32).cos()).normalized();
 
         let subresource_range = vk::ImageSubresourceRange::default()
@@ -544,7 +577,18 @@ impl InternalApp {
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
             .size(vk::WHOLE_SIZE);
-        let image_memory_barriers = [swapchain_image_undefined_to_blit_dst_layout_transition];
+        let svt_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(self.svt.sparse_image)
+            .subresource_range(subresource_range);
+        let image_memory_barriers = [swapchain_image_undefined_to_blit_dst_layout_transition, svt_image_barrier];
         let buffer_memory_barriers = [lights_buffer_barrier];
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
         self.device.cmd_pipeline_barrier2(cmd, &dep);

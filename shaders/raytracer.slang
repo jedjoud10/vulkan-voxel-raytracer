@@ -8,7 +8,7 @@
 RWTexture2D<float4> output;
 
 [[vk::binding(0, 1)]]
-RWTexture3D<uint8_t> svt;
+RWTexture3D<uint8_t4> svt;
 
 [[vk::binding(1, 1)]]
 RWTexture3D<uint8_t> svt_metadata;
@@ -30,6 +30,9 @@ SamplerCube<float4> skybox_sampler;
 
 [[vk::binding(7, 1)]]
 Sampler2D<float4> clouds_sampler;
+
+[[vk::binding(8, 1)]]
+Sampler3D<float4> svt_sampler;
 
 
 [SpecializationConstant] const uint SHADOW_SAMPLES = 1;
@@ -136,7 +139,49 @@ float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> 
     return clouds_colour_opacity;
 }
 
-//#define DEBUG
+float4 dda<let N : int>(
+    float3 ray_dir,
+    float3 ray_pos,
+) {
+    float3 floored_pos = floor(ray_pos);
+    float3 inv_dir = 1 / ray_dir;
+    float3 dir_sign = sign(ray_dir);
+    float3 side_dist = (floored_pos - ray_pos + 0.5 + 0.5 * dir_sign);
+    float4 summed = 0;
+
+    for (int i = 0; i < N; i++) {
+        float4 voxel = (float4)svt.Load((uint3)(floored_pos)) / 255.0;
+        
+        summed += voxel.w / N;
+        
+        float3 reconst = side_dist * inv_dir;
+        int3 eqs = select(min3(reconst.x, reconst.y, reconst.z) == reconst, 1, 0);
+        floored_pos += dir_sign * eqs;
+        side_dist += dir_sign * eqs;
+    }
+
+    return summed;
+}
+
+
+float4 raymarch<let N : int>(
+    float3 ray_dir,
+    float3 ray_pos,
+) {
+    float4 summed = 0;
+
+    for (int i = 0; i < N; i++) {
+        float4 voxel = (float4)svt_sampler.Sample(ray_pos / (float)TOTAL_SIZE);
+        
+        summed += voxel.w / N;
+
+        ray_pos += ray_dir;
+    }
+
+    return summed;
+}
+
+#define DEBUG
 
 [shader("compute")]
 [numthreads(GROUP_SIZE, GROUP_SIZE, 1)]
@@ -229,18 +274,20 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 
             //normal = normalize(normal + (hash33(floor(world * 16)) - 0.5) * 0.3);
             
-
             float3 diffuse = 1.0;
+            //float3 diffuse = (float3)svt.Load(block_pos).xyz / 255.0;
 
             float roughness = 0.80;
             float special = 0;
             float metallic = 0;
-            
+
             // pick random colour
             if (block_pos.x > TOTAL_SIZE / 2) {
                 diffuse = lerp(per_block_unique_colour(block_pos), 1, 0.5);
             }
-
+                
+                
+            /*
             // pick random roughness + metallic
             if (block_pos.z > TOTAL_SIZE / 2) {
                 roughness = hash13(block_pos * float3(3.23123, 5.23423, -5.234234));
@@ -251,6 +298,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             if (block_pos.y > 4) {
                 special = hash13(floor(block_pos / 8));
             }
+            */
 
             if (special > 0.8 && metallic > 0.0) {
                 
@@ -302,11 +350,11 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 // AMBIENT OCCLUSION
                 float ao = 1.0;
                 if (AMBIENT_OCCLUSION) {
-                    //ao = 0;
-
                     float3 wtf = select(normal < 0, -2, normal);
+                    ao = 1 - saturate(svt_sampler.Sample((world + wtf) / (float)TOTAL_SIZE).w * 0.5);
 
-                    ao -= Fetcher(svt, svt_metadata).is_solid((uint3)floor(block_pos + wtf)) * 0.5;
+                    
+                    //ao -= Fetcher(svt, svt_metadata).is_solid((uint3)floor(block_pos + wtf)) * 0.5;
 
                     //ao_solver solver = ao_solver(Fetcher(svt, svt_metadata), block_pos, world-block_pos, ray.face, sign(iterative_ray_dir));
                     //ao = lerp(solver.ao(), 1, 0.0);
@@ -372,7 +420,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.05, sun.xyz, svo, stats).hit;
+                    //  - raymarch<256>(sun.xyz, shadow_ray_start).x * 20.0
                     shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start, clouds_sampler).a));
+                    //shadow = saturate(shadow);
+
                 } else {
                     shadow = 1.0;
                 }
@@ -433,7 +484,10 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             output[id.xy] = float4(color, alpha);
             break;
         case DebugType::Iterations:
-            output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
+            output[id.xy] = raymarch<64>(ray_dir, ray_pos);    
+            //output[id.xy] = dda<64>(ray_dir, ray_pos);
+            //return;
+            //output[id.xy] = float4(heatmap(stats.iterations / 256.0), 0);
             break;
         case DebugType::BufferFetches:
             output[id.xy] = float4(heatmap(stats.buffer_fetches / 32.0), 0);

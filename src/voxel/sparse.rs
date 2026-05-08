@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, time::Instant};
 use crate::utils::*;
 use crate::voxel::chunk::CHUNK_SIZE;
+use crate::voxel::util::{PartialSparseImageChunk, SparseImageChunk};
 use ash::vk;
 use gpu_allocator::vulkan::Allocator;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -51,15 +52,15 @@ impl SparseVoxelOctree {
 
         let pos = chunk.position * CHUNK_SIZE as u32;
         
-        log::debug!("boogaloo time for chunk with origin world pos : {pos} and chunk pos : {}", chunk.position);
+        log::trace!("boogaloo time for chunk with origin world pos : {pos} and chunk pos : {}", chunk.position);
         let mut current = Some(TopDownTraversalNode2 { node: &mut self.root, height: SVO_DEPTH-1, origin: vek::Vec3::zero() });
 
         while let Some(node) = current.take() {
             let size = 1 << (node.height*2);
             
-            log::debug!("height: {}, origin: {}, size: {}", node.height, node.origin, size);
+            log::trace!("height: {}, origin: {}, size: {}", node.height, node.origin, size);
             let child_offset = (pos - node.origin) / vek::Vec3::broadcast(size);
-            log::debug!("child offset: {}", child_offset);
+            log::trace!("child offset: {}", child_offset);
 
             assert!(child_offset.cmpge(&vek::Vec3::broadcast(0u32)).reduce_and());
             assert!(child_offset.cmplt(&vek::Vec3::broadcast(4u32)).reduce_and());
@@ -72,23 +73,23 @@ impl SparseVoxelOctree {
 
             // no need to do anything if we are trying to add a voxel to an already full sub-tree
             if chunk.is_full() && node.node.full {
-                log::debug!("node was already full and chunk was already full too. exiting early");
+                log::trace!("node was already full and chunk was already full too. exiting early");
                 break;
             }
 
             node.node.children.get_or_insert_with(|| {
                 if node.height == 3 {
-                    log::debug!("adding chunk node children");
+                    log::trace!("adding chunk node children");
                     TopLevelAccelerationStructureNodeChildren::ChunkNodeChildren { children: Box::new([const { None }; 64]) }
                 } else {
-                    log::debug!("adding recursive node children");
+                    log::trace!("adding recursive node children");
                     TopLevelAccelerationStructureNodeChildren::RecursiveNodeChildren { children: Box::new([const { None }; 64]) }
                 }
             });
 
             // if we are removing a voxel from a full node, we must add all of its OTHER children that must be full, except the one we are modifying
             if !chunk.is_full() && node.node.full {
-                log::debug!("replacing siblings with full recursive nodes");
+                log::trace!("replacing siblings with full recursive nodes");
                 for i in 0..64 {
                     if i != child_index_relative as usize /* && self.nodes[node.index].children.as_ref().unwrap()[i].is_none() */ {
                         let new_full_child = TopLevelAccelerationStructureNode {
@@ -118,11 +119,11 @@ impl SparseVoxelOctree {
 
                 if let Some(valid_child) = child_mut_ref {
                     // overwrite?
-                    log::debug!("overwrite chunk child node sparse representation");
+                    log::trace!("overwrite chunk child node sparse representation");
                     *valid_child = chunk.sparse_representation.clone(); 
                     break;
                 } else {
-                    log::debug!("first write chunk child node sparse representation");
+                    log::trace!("first write chunk child node sparse representation");
                     *child_mut_ref = Some(chunk.sparse_representation.clone());
                     break;
                 }

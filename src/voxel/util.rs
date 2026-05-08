@@ -46,6 +46,11 @@ pub struct SparseImageChunk {
     pub full: bool,
 }
 
+// contains PARTIAL data. NOT full NOR empty
+pub struct PartialSparseImageChunk {
+    pub origin: vek::Vec3<u32>,
+}
+
 /*
 struct SimpleTraversalNode<'a> {
     node: &'a FlatNode,
@@ -188,6 +193,7 @@ pub fn convert_to_sparse_image_chunks(nodes: &[FlatNode]) -> Vec<SparseImageChun
 
 // hard-coded chunk granularity of 64x64x64
 pub fn convert_to_sparse_image_chunks(chunks: &[Chunk]) -> Vec<SparseImageChunk> {
+    log::debug!("converting normal chunks to sparse image chunks... ");
     let mut binding_chunks = Vec::<SparseImageChunk>::new();
 
     for chunk in chunks {
@@ -195,10 +201,10 @@ pub fn convert_to_sparse_image_chunks(chunks: &[Chunk]) -> Vec<SparseImageChunk>
             ChunkData::Full => Vec::new(),
             ChunkData::Empty => Vec::new(),
             ChunkData::Partial(fixed_bit_set) => {
-                let mut data = Vec::<u8>::with_capacity(CHUNK_VOLUME);
+                let mut data = Vec::<vek::Vec4<u8>>::with_capacity(CHUNK_VOLUME);
                 for bit_index in 0..CHUNK_VOLUME {
                     let is_set = fixed_bit_set.contains(bit_index);
-                    data.push(if is_set { 255 } else { 0 });
+                    data.push(if is_set { vek::Vec4::broadcast(255) } else { vek::Vec4::zero() });
                 }
                 data
             },
@@ -206,10 +212,12 @@ pub fn convert_to_sparse_image_chunks(chunks: &[Chunk]) -> Vec<SparseImageChunk>
         
         binding_chunks.push(SparseImageChunk {
             origin: chunk.position * (CHUNK_SIZE as u32),
-            data: data,
+            data: bytemuck::cast_slice(&data).to_vec(),
             full: chunk.is_full()
         });
     }
+
+    log::debug!("finished with {} sparse image binding chunks", binding_chunks.len());
 
     binding_chunks
 }
