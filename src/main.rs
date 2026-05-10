@@ -16,7 +16,7 @@ mod utils;
 mod renderer;
 mod skybox;
 mod others;
-mod constant_descriptor_sets;
+mod constant_data;
 mod per_frame_data;
 mod samplers;
 

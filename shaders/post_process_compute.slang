@@ -8,10 +8,10 @@
 readonly RWTexture2D<float4> pre_compose;
 
 [[vk::binding(1, 0)]]
-RWTexture2D<float4> swapchain_image;
-
-[[vk::binding(2, 0)]]
 Sampler2D<float4> entire_bloom_image;
+
+[[vk::binding(0, 1)]]
+RWTexture2D<float4> swapchain_image;
 
 [SpecializationConstant] const uint DOWNSCALE_FACTOR = 1;
 

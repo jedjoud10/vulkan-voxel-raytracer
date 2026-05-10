@@ -62,7 +62,7 @@ impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeli
 }
 
 pub type RenderPipeline = MultiComputePipeline<1, 2>;
-pub type PostProcessPipeline = MultiComputePipeline<3, 2>;
+pub type PostProcessPipeline = MultiComputePipeline<3, 3>;
 pub type SkyPipeline = MultiComputePipeline<2, 1>;
 pub type VoxelPipeline = MultiComputePipeline<1, 1>;
 
@@ -244,29 +244,38 @@ pub unsafe fn create_post_process_pipeline(
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
         .descriptor_count(1);
-    let rt_image = vk::DescriptorSetLayoutBinding::default()
-        .binding(1)
-        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-        .descriptor_count(1);
     let bloom_image = vk::DescriptorSetLayoutBinding::default()
-        .binding(2)
+        .binding(1)
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
         .descriptor_count(1);
     let bindings = [
         rendered_image,
-        rt_image,
         bloom_image
     ];
-
     let descriptor_set_layout_create_info_1 = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::empty())
         .bindings(&bindings);
     let descriptor_set_layout_1 = device
         .create_descriptor_set_layout(&descriptor_set_layout_create_info_1, None)
         .unwrap();
-    crate::debug::set_object_name(descriptor_set_layout_1, binder, "post proces compute descriptor set layout 1 (post process)");
+    crate::debug::set_object_name(descriptor_set_layout_1, binder, "post proces compute descriptor set layout 1 (post process constant)");
+
+    let rt_image = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .descriptor_count(1);
+    let bindings = [
+        rt_image
+    ];
+    let descriptor_set_layout_create_info_1_1 = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings);
+    let descriptor_set_layout_1_1 = device
+        .create_descriptor_set_layout(&descriptor_set_layout_create_info_1_1, None)
+        .unwrap();
+    crate::debug::set_object_name(descriptor_set_layout_1_1, binder, "post proces compute descriptor set layout 1.1 (post process per frame)");
 
     let previous_bloom_mip = vk::DescriptorSetLayoutBinding::default()
         .binding(0)
@@ -294,7 +303,7 @@ pub unsafe fn create_post_process_pipeline(
     let spec_constants = spec_constant_fields.iter().map(|x| SpecConstant { bytes: bytemuck::bytes_of(x) }).collect::<Vec<_>>();
 
     let push_constant_size = Some(size_of::<PushConstants>());
-    let post_process_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "write_swapchain_image", &[descriptor_set_layout_1], push_constant_size, Some(&spec_constants));
+    let post_process_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "write_swapchain_image", &[descriptor_set_layout_1, descriptor_set_layout_1_1], push_constant_size, Some(&spec_constants));
 
     let push_constant_size2 = Some(size_of::<vek::Vec2<f32>>());
     let bloom_downsample_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "bloom_downsample", &[descriptor_set_layout_2], push_constant_size2, None);
@@ -303,7 +312,7 @@ pub unsafe fn create_post_process_pipeline(
 
     PostProcessPipeline {
         module: shader_module,
-        descriptor_set_layout: [descriptor_set_layout_1, descriptor_set_layout_2],
+        descriptor_set_layout: [descriptor_set_layout_1, descriptor_set_layout_1_1, descriptor_set_layout_2],
         entry_points: [post_process_entry_point, bloom_downsample_entry_point, bloom_upsample_entry_point],
     }
 }
