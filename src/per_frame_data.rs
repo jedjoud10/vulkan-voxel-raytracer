@@ -1,7 +1,8 @@
 use ash::vk;
 use gpu_allocator::vulkan::Allocation;
-
 use crate::pipeline;
+
+pub const FRAMES_IN_FLIGHT: usize = 3;
 
 pub struct PerFrameDescriptorSets {
     pub main_render_per_frame: vk::DescriptorSet,
@@ -11,7 +12,6 @@ pub struct PerFrameDescriptorSets {
 }
 
 pub struct PerFrameData {
-    pub swapchain_image: vk::Image,
     pub rt_image: vk::Image,
     pub rt_image_allocation: Option<Allocation>,
     pub rendered_image: vk::Image,
@@ -19,7 +19,6 @@ pub struct PerFrameData {
     
     pub bloom_image: vk::Image,
     pub bloom_image_allocation: Option<Allocation>,
-    pub bloom_sampler: vk::Sampler,
     pub bloom_mip_image_views: Vec<vk::ImageView>,
 
     pub present_complete_semaphore: vk::Semaphore,
@@ -30,7 +29,6 @@ pub struct PerFrameData {
     
     pub rendered_image_view: vk::ImageView,
     pub rt_image_view: vk::ImageView,
-    pub swapchain_image_view: vk::ImageView,
     pub entire_bloom_image_view: vk::ImageView,
 }
 
@@ -41,7 +39,6 @@ impl PerFrameData {
         descriptor_pool: vk::DescriptorPool,
         render_compute_pipeline: &pipeline::RenderPipeline,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
-        swapchain_image: vk::Image
     ) -> Self {
         let present_complete_semaphore = device
             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
@@ -68,20 +65,7 @@ impl PerFrameData {
             .allocate_descriptor_sets(&descriptor_set_allocate_info)
             .unwrap();
 
-        // TODO: don't fucking create this per frame you absolute fucking DUMBASS
-        let bloom_sampler_create_info = vk::SamplerCreateInfo::default()
-            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-            .min_filter(vk::Filter::LINEAR)
-            .mag_filter(vk::Filter::LINEAR)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .max_lod(100f32)
-            .min_lod(0f32);
-        let bloom_sampler = device.create_sampler(&bloom_sampler_create_info, None).unwrap();
-
         Self {
-            swapchain_image,
             rt_image: vk::Image::null(),
             rt_image_allocation: None,
             rendered_image: vk::Image::null(),
@@ -97,12 +81,10 @@ impl PerFrameData {
                 compositor_upsample_bloom_per_frame: Vec::default(),
             },
             rt_image_view: vk::ImageView::null(),
-            swapchain_image_view: vk::ImageView::null(),
             rendered_image_view: vk::ImageView::null(),
             bloom_image: vk::Image::null(),
             bloom_image_allocation: None,
             entire_bloom_image_view: vk::ImageView::null(),
-            bloom_sampler,
             bloom_mip_image_views: Default::default(),
         }
     }
@@ -111,18 +93,16 @@ impl PerFrameData {
         &mut self,
         device: &ash::Device,
         swapchain_format: vk::Format,
-        swapchain_image: vk::Image,
         allocator: &mut gpu_allocator::vulkan::Allocator,
         queue_family_index: u32,
         extent: vk::Extent2D,
         binder: &Option<ash::ext::debug_utils::Device>,
         descriptor_pool: vk::DescriptorPool,
+        samplers: &crate::samplers::Samplers,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
         scaling_factor: u32,
     ) {
         log::debug!("recreate images & descriptor set stuff for per-frame-data...");
-        self.swapchain_image = swapchain_image;
-
 
         let (rt_image, rt_image_allocation) = create_image(device, swapchain_format, allocator, queue_family_index, extent, binder, scaling_factor, "Render Texture (post-process)", None);
         self.rt_image = rt_image;
@@ -161,14 +141,6 @@ impl PerFrameData {
             .subresource_range(subresource_range)
             .view_type(vk::ImageViewType::TYPE_2D);
 
-        let swapchain_image_view_create_info = vk::ImageViewCreateInfo::default()
-            .components(vk::ComponentMapping::default())
-            .flags(vk::ImageViewCreateFlags::empty())
-            .format(swapchain_format)
-            .image(self.swapchain_image)
-            .subresource_range(subresource_range)
-            .view_type(vk::ImageViewType::TYPE_2D);
-
         let rendered_image_view_create_info = vk::ImageViewCreateInfo::default()
             .components(vk::ComponentMapping::default())
             .flags(vk::ImageViewCreateFlags::empty())
@@ -187,9 +159,6 @@ impl PerFrameData {
 
         self.rt_image_view = device
             .create_image_view(&rt_image_view_create_info, None)
-            .unwrap();
-        self.swapchain_image_view = device
-            .create_image_view(&swapchain_image_view_create_info, None)
             .unwrap();
         self.rendered_image_view = device
             .create_image_view(&rendered_image_view_create_info, None)
@@ -249,9 +218,9 @@ impl PerFrameData {
 
             let descriptor_image_write = if mip_level == 0 {
                 // first mip will read immediately from the rendered texture
-                vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.rendered_image_view).sampler(self.bloom_sampler)
+                vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.rendered_image_view).sampler(samplers.bloom_sampler)
             } else {
-                vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.bloom_mip_image_views[mip_level as usize]).sampler(self.bloom_sampler)
+                vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.bloom_mip_image_views[mip_level as usize]).sampler(samplers.bloom_sampler)
             };
             
             // write previous mip to descriptor set
@@ -283,7 +252,7 @@ impl PerFrameData {
             let dst_bloom_descriptor_set = self.per_frame_descriptor_sets.compositor_upsample_bloom_per_frame[mip_level as usize];
 
             // write previous mip to descriptor set
-            let descriptor_image_write = vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.bloom_mip_image_views[mip_level as usize + 1]).sampler(self.bloom_sampler);
+            let descriptor_image_write = vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL).image_view(self.bloom_mip_image_views[mip_level as usize + 1]).sampler(samplers.bloom_sampler);
             let descriptor_image_writes = [descriptor_image_write]; 
             let previous_mip_descriptor_write = vk::WriteDescriptorSet::default()
                 .descriptor_count(1)
@@ -316,7 +285,7 @@ impl PerFrameData {
         let descriptor_entire_bloom_image_view_info = vk::DescriptorImageInfo::default()
             .image_view(self.entire_bloom_image_view)
             .image_layout(vk::ImageLayout::GENERAL)
-            .sampler(self.bloom_sampler);
+            .sampler(samplers.bloom_sampler);
 
         // rendered image for raytracer (write only)
         let render_compute_descriptor_image_infos = [descriptor_rendered_image_view_info];
@@ -360,7 +329,6 @@ impl PerFrameData {
     }
     
     pub unsafe fn destroy_rt_images_and_image_views(&mut self, device: &ash::Device, descriptor_pool: vk::DescriptorPool, allocator: &mut gpu_allocator::vulkan::Allocator) {
-        device.destroy_image_view(self.swapchain_image_view, None);
         device.destroy_image_view(self.rt_image_view, None);
         device.destroy_image_view(self.rendered_image_view, None);
         device.destroy_image_view(self.entire_bloom_image_view, None);
@@ -406,10 +374,7 @@ impl PerFrameData {
         log::info!("destroyed semaphores and fences frame data");            
 
         device.free_command_buffers(cmd_pool, &[self.cmd]);
-        log::info!("destroyed cmd buffer frame data");      
-
-        device.destroy_sampler(self.bloom_sampler, None);
-        log::info!("destroyed bloom sampler");            
+        log::info!("destroyed cmd buffer frame data");       
     }
 }
 

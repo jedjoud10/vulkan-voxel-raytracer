@@ -5,6 +5,7 @@ use rand::SeedableRng;
 use crate::input::Button;
 use crate::input::Input;
 use crate::movement::Movement;
+use crate::samplers;
 use winit::event::MouseButton;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
@@ -49,6 +50,8 @@ pub struct InternalApp {
     swapchain_format: vk::Format,
     swapchain_loader: ash::khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
     
     // queue
     queue: vk::Queue,
@@ -81,6 +84,7 @@ pub struct InternalApp {
     skybox: skybox::Skybox,
     lights_buffer: buffer::Buffer,
     lights: Vec<vek::Vec4<f32>>,
+    samplers: samplers::Samplers,
     
     // other CPU stuff
     pub was_resized: bool,
@@ -204,7 +208,7 @@ impl InternalApp {
             }
         }
 
-        let (swapchain_loader, swapchain, swapchain_images, swapchain_format) = swapchain::create_swapchain(
+        let (swapchain_loader, swapchain, swapchain_images, swapchain_image_views, swapchain_format) = swapchain::create_swapchain(
             &instance,
             &surface_loader,
             surface_khr,
@@ -213,7 +217,7 @@ impl InternalApp {
             extent,
             &debug_marker,
         );
-        log::info!("created swapchain with {} in-flight images", swapchain_images.len());
+        log::info!("created swapchain with {} images", swapchain_images.len());
 
         // swapchain::transfer_rt_images(&device, queue_family_index, &rt_images, pool, queue);
         // log::info!("transferred layout of render texture images");
@@ -253,6 +257,9 @@ impl InternalApp {
         );
         log::info!("created sparse voxel structures");
 
+        let samplers = samplers::Samplers::create_samplers(&device);
+        log::info!("created samplers");        
+
         let skybox = skybox::create_skybox(
             &device,
             &mut allocator,
@@ -263,12 +270,12 @@ impl InternalApp {
         );
         log::info!("created skybox");
 
-        let mut frames_in_flight = Vec::<PerFrameData>::new();
-        for swapchain_image in swapchain_images {
-            let mut per_frame_data = PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &render_compute_pipeline, &post_process_compute_pipeline, swapchain_image);
-            per_frame_data.recreate_rt_images_and_image_views_and_update_descriptor_sets(&device, swapchain_format, swapchain_image, &mut allocator, queue_family_index, extent, &debug_marker, descriptor_pool, &post_process_compute_pipeline, args.downscale_factor);
-            frames_in_flight.push(per_frame_data);
-        }
+        let frames_in_flight = (0..crate::per_frame_data::FRAMES_IN_FLIGHT).into_iter().map(|_| {
+            let mut per_frame_data = PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &render_compute_pipeline, &post_process_compute_pipeline);
+            per_frame_data.recreate_rt_images_and_image_views_and_update_descriptor_sets(&device, swapchain_format, &mut allocator, queue_family_index, extent, &debug_marker, descriptor_pool, &samplers, &post_process_compute_pipeline, args.downscale_factor);
+            per_frame_data
+        }).collect::<Vec<_>>();
+
         crate::per_frame_data::transfer_layout_for_images(&device, queue_family_index, &frames_in_flight, pool, queue);
         log::info!("created frames in flight structures");
 
@@ -287,7 +294,7 @@ impl InternalApp {
         buffer::write_to_buffer(&device, pool, queue, lights_buffer.buffer, &mut allocator, bytemuck::cast_slice(lights.as_slice()));
         log::info!("created lights buffer");
 
-        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &voxel_compute_pipeline, &skybox, &svt, &svo, &lights_buffer);
+        let const_descriptor_sets = ConstantDescriptorSets::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &voxel_compute_pipeline, &samplers, &skybox, &svt, &svo, &lights_buffer);
         log::info!("created constant descriptor sets");
 
         let query_pool = others::create_query_pool(&device);
@@ -333,6 +340,9 @@ impl InternalApp {
             lights,
             post_process_compute_pipeline,
             voxel_compute_pipeline,
+            samplers,
+            swapchain_images,
+            swapchain_image_views,
         }
     }
 
@@ -356,13 +366,16 @@ impl InternalApp {
 
         self.swapchain_loader
             .destroy_swapchain(self.swapchain, None);
+        for swapchain_image_view in self.swapchain_image_views.iter() {
+            self.device.destroy_image_view(*swapchain_image_view, None);
+        }
 
         let width = self.window.inner_size().width;
         let height = self.window.inner_size().height;
         
         let extent = vk::Extent2D { width, height };
 
-        let (swapchain_loader, swapchain, images, swapchain_format) = swapchain::create_swapchain(
+        let (swapchain_loader, swapchain, swapchain_images, swapchain_image_views, swapchain_format) = swapchain::create_swapchain(
             &self.instance,
             &self.surface_loader,
             self.surface_khr,
@@ -374,10 +387,12 @@ impl InternalApp {
 
         self.swapchain_loader = swapchain_loader;
         self.swapchain_format = swapchain_format;
+        self.swapchain_images = swapchain_images;
+        self.swapchain_image_views = swapchain_image_views;
         self.swapchain = swapchain;
 
-        for (per_frame_data, swapchain_image) in self.frames_in_flight.iter_mut().zip(images) {
-            per_frame_data.recreate_rt_images_and_image_views_and_update_descriptor_sets(&self.device, swapchain_format, swapchain_image, &mut self.allocator, self.queue_family_index, extent, &self.debug_marker, self.descriptor_pool, &self.post_process_compute_pipeline, self.args.downscale_factor);
+        for per_frame_data in self.frames_in_flight.iter_mut() {
+            per_frame_data.recreate_rt_images_and_image_views_and_update_descriptor_sets(&self.device, swapchain_format, &mut self.allocator, self.queue_family_index, extent, &self.debug_marker, self.descriptor_pool, &self.samplers, &self.post_process_compute_pipeline, self.args.downscale_factor);
         }
         crate::per_frame_data::transfer_layout_for_images(&self.device, self.queue_family_index, &self.frames_in_flight, self.pool, self.queue);
                 
@@ -440,12 +455,12 @@ impl InternalApp {
     }
 
     pub unsafe fn render(&mut self, delta: f32, elapsed: f32) {
-        let frame_index = self.frame_count % (self.frames_in_flight.len() as u64);
+        //let frame_in_flight_index = 0;
+        let frame_in_flight_index = self.frame_count % (self.frames_in_flight.len() as u64);
         let constant_descriptor_sets = &self.const_descriptor_sets;
         let PerFrameData {
             rendered_image, // first render to this...
             rt_image, // then compose onto this...
-            swapchain_image, // then blit to this...
             present_complete_semaphore,
             end_fence,
             cmd,
@@ -453,10 +468,9 @@ impl InternalApp {
             bloom_image,
             bloom_mip_image_views,
             ..
-        } = &self.frames_in_flight[frame_index as usize];
+        } = &self.frames_in_flight[frame_in_flight_index as usize];
 
         let cmd = *cmd;
-        let swapchain_image = *swapchain_image;
         let rt_image = *rt_image;
         let present_complete_semaphores = [*present_complete_semaphore];
         let end_fence = *end_fence;
@@ -472,7 +486,6 @@ impl InternalApp {
                 self.stats.push_query_timings(delta_in_ms);
             }
         }
-
 
         let mut rng = rand::rngs::SmallRng::seed_from_u64(421);
 
@@ -496,6 +509,8 @@ impl InternalApp {
                 vk::Fence::null(),
             )
             .unwrap();
+
+        let swapchain_image = self.swapchain_images[acquired_swapchain_image_index as usize]; // then blit to this...
 
         let _start = std::time::Instant::now();
 
@@ -1026,7 +1041,7 @@ impl InternalApp {
         // FIXME: there's still something wrong with frames in flight presenting. lots of stuttering and weird shit happening wtf
         // remove this when shit is fixed pls thx
         // also this fixes issues with OBS recording stuff :(
-        self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
+        //self.device.wait_for_fences(&[end_fence], true, u64::MAX).unwrap(); 
        
         self.stats.end_of_frame(self.frame_count);
         self.frame_count += 1;
@@ -1086,6 +1101,9 @@ impl InternalApp {
 
         self.surface_loader.destroy_surface(self.surface_khr, None);
         log::info!("destroyed surface");
+
+        self.samplers.destroy_samplers(&self.device);
+        log::info!("destroyed samplers");
 
         self.device.destroy_command_pool(self.pool, None);
         log::info!("destroyed cmd pool");

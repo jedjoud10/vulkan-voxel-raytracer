@@ -18,6 +18,7 @@ mod skybox;
 mod others;
 mod constant_descriptor_sets;
 mod per_frame_data;
+mod samplers;
 
 use clap::Parser;
 use std::ops::ControlFlow;

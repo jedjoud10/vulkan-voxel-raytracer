@@ -1,6 +1,7 @@
 use ash::vk;
 
 use crate::pipeline;
+use crate::samplers;
 use crate::skybox;
 use crate::voxel;
 use crate::buffer;
@@ -19,6 +20,7 @@ impl ConstantDescriptorSets {
         sky_compute_pipeline: &pipeline::SkyPipeline,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
         voxel_compute_pipeline: &pipeline::VoxelPipeline,
+        samplers: &samplers::Samplers,
         skybox: &skybox::Skybox,
         svt: &voxel::SparseVoxelTexture,
         svo: &voxel::SparseVoxelOctree,
@@ -80,11 +82,11 @@ impl ConstantDescriptorSets {
             .range(u64::MAX);
         let descriptor_skybox_sampler_info = vk::DescriptorImageInfo::default()
             .image_view(skybox.skybox_image_view)
-            .sampler(skybox.sampler)
+            .sampler(samplers.skybox_sampler)
             .image_layout(vk::ImageLayout::GENERAL);
         let descriptor_clouds_sampler_info = vk::DescriptorImageInfo::default()
             .image_view(skybox.clouds_image_view)
-            .sampler(skybox.sampler)
+            .sampler(samplers.skybox_sampler)
             .image_layout(vk::ImageLayout::GENERAL);
         let descriptor_svt_sampler_info = vk::DescriptorImageInfo::default()
             .image_view(svt.sampled_sparse_image_view)

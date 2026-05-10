@@ -185,6 +185,15 @@ float stars(float3 rd) {
     return stars * rd.y;
 }
 
+// extra func to calculate sun colour
+float3 sun_colour(float3 light) {
+    // TODO: use atmo sky scattering instead of this
+    float3 midday_colour = pow(float3(252, 232, 212) / 255.0, 1/2.2);
+    float3 sunset_colour = pow(float3(249, 128, 7) / 255.0, 1/2.2);
+
+    return lerp(sunset_colour, midday_colour, smoothstep(0, 0.2, light.y));
+}
+
 // the sky colour is a mix of SkyTheDragon's realtistic sky and thenuclearwolf's starnight implementation
 float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnabled = true, bool clouds_enabled = false) {
     float sunHeight = sun_dir.y;
@@ -203,7 +212,7 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
         float sun = max(0.0, smoothstep(0.5, 1.5, dot(ray_dir, sun_dir))) * 0.5;
         float sunDisc = smoothstep(0.9999, 0.999935, dot(ray_dir, sun_dir));
 
-        res += sunDisc * dayTime * 500.0;
+        res += sunDisc * dayTime * 500.0 * sun_colour(sun_dir);
 
         float starsIntensity = stars(ray_dir) * 0.3;
         res += starsIntensity * night;

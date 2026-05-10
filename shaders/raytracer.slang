@@ -94,16 +94,6 @@ Optional<float2> ray_plane_intersect_for_clouds(float3 ray_dir, float3 ray_pos, 
     return none;
 }
 
-
-// extra func to calculate sun colour
-float3 sun_colour(float3 light) {
-    // TODO: use atmo sky scattering instead of this
-    float3 midday_colour = pow(float3(252, 232, 212) / 255.0, 1/2.2);
-    float3 sunset_colour = pow(float3(249, 128, 7) / 255.0, 1/2.2);
-
-    return lerp(sunset_colour, midday_colour, smoothstep(0, 0.2, light.y));
-}
-
 float4 clouds_interesting(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
     float4 clouds_colour_opacity = 0;
     if (let pos = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 800)) {

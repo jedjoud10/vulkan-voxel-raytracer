@@ -16,8 +16,6 @@ pub struct Skybox {
     
     pub skybox_image_allocation: Allocation,
     pub clouds_image_allocation: Allocation,
-
-    pub sampler: vk::Sampler,
 }
 
 impl Skybox {
@@ -31,9 +29,7 @@ impl Skybox {
         device.destroy_image_view(self.ambient_skybox_array_image_view, None);
         device.destroy_image(self.ambient_skybox_image, None);
         */
-        
-        device.destroy_sampler(self.sampler, None);
-        
+                
         device.destroy_image(self.clouds_image, None);
         device.destroy_image_view(self.clouds_image_view, None);
         
@@ -48,7 +44,6 @@ pub const SKYBOX_RESOLUTION: u32 = 256;
 pub const AMBIENT_DIFFUSE_SKYBOX_RESOLUTION: u32 = 32;
 pub const CLOUDS_RESOLUTION: u32 = 512;
 const FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
-const FILTER: vk::Filter = vk::Filter::NEAREST;
 
 
 
@@ -230,20 +225,10 @@ pub unsafe fn create_skybox(
         .create_image_view(&clouds_image_view_create_info, None)
         .unwrap();
 
-    let sampler_create_info = vk::SamplerCreateInfo::default()
-        .mag_filter(FILTER)
-        .min_filter(FILTER)
-        .address_mode_u(vk::SamplerAddressMode::REPEAT)
-        .address_mode_v(vk::SamplerAddressMode::REPEAT)
-        .address_mode_w(vk::SamplerAddressMode::REPEAT);
-
-    let sampler = device.create_sampler(&sampler_create_info, None).unwrap();
-
     Skybox {
         skybox_image,
         skybox_image_view: image_view,
         skybox_image_allocation,
-        sampler,
         skybox_array_image_view,
         clouds_image,
         clouds_image_view,
