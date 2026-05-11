@@ -1,11 +1,12 @@
 use ash::vk;
-use gpu_allocator::vulkan::Allocation;
-use crate::pipeline;
+use gpu_allocator::vulkan::{Allocation, Allocator};
+use crate::pipeline::{self, PerFrameUniformData};
 
 pub const FRAMES_IN_FLIGHT: usize = 3;
 
 pub struct PerFrameDescriptorSets {
     pub compositor_per_frame: vk::DescriptorSet,
+    pub rasterizer_per_frame: vk::DescriptorSet,
 }
 
 pub struct PerFrameData {
@@ -14,6 +15,8 @@ pub struct PerFrameData {
     pub end_fence: vk::Fence,
     pub cmd: vk::CommandBuffer,
     pub per_frame_descriptor_sets: PerFrameDescriptorSets,
+    
+    pub uniform_buffer: crate::buffer::Buffer,
 }
 
 impl PerFrameData {
@@ -22,6 +25,9 @@ impl PerFrameData {
         pool: vk::CommandPool,
         descriptor_pool: vk::DescriptorPool,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
+        rasterized_pipeline: &pipeline::RasterizationRenderPipeline,
+        allocator: &mut Allocator,
+        binder: &Option<ash::ext::debug_utils::Device>,
     ) -> Self {
         let present_complete_semaphore = device
             .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
@@ -40,13 +46,16 @@ impl PerFrameData {
             .allocate_command_buffers(&cmd_buffer_create_info)
             .unwrap()[0];
 
-        let per_frame_descriptor_set_layouts = [post_process_compute_pipeline.descriptor_set_layout[1]];
+        let per_frame_descriptor_set_layouts = [post_process_compute_pipeline.descriptor_set_layout[1], rasterized_pipeline.descriptor_set_layout[0]];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&per_frame_descriptor_set_layouts);
         let all_descriptor_sets_for_frame = device
             .allocate_descriptor_sets(&descriptor_set_allocate_info)
             .unwrap();
+
+
+        let uniform_buffer = crate::buffer::create_buffer(device, allocator, size_of::<PerFrameUniformData>(), binder, "per frame uniform buffer", vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST);
 
         Self {
             present_complete_semaphore,
@@ -55,11 +64,13 @@ impl PerFrameData {
             cmd,
             per_frame_descriptor_sets: PerFrameDescriptorSets {
                 compositor_per_frame: all_descriptor_sets_for_frame[0],
+                rasterizer_per_frame: all_descriptor_sets_for_frame[1],
             },
+            uniform_buffer,
         }
     }
     
-    pub unsafe fn destroy_everything(self, device: &ash::Device, cmd_pool: vk::CommandPool) {
+    pub unsafe fn destroy_everything(self, device: &ash::Device, cmd_pool: vk::CommandPool, allocator: &mut Allocator) {
         device.destroy_semaphore(self.present_complete_semaphore, None);
         device.destroy_semaphore(self.render_finished_semaphore, None);
         device.destroy_fence(self.end_fence, None);
@@ -67,5 +78,8 @@ impl PerFrameData {
 
         device.free_command_buffers(cmd_pool, &[self.cmd]);
         log::info!("destroyed cmd buffer frame data");       
+
+        self.uniform_buffer.destroy(device, allocator);
+        log::info!("destroyed per frame uniform buffer");       
     }
 }

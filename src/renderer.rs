@@ -65,6 +65,7 @@ pub struct InternalApp {
     sky_compute_pipeline: pipeline::SkyPipeline,
     post_process_compute_pipeline: pipeline::PostProcessPipeline,
     voxel_compute_pipeline: pipeline::VoxelPipeline,
+    rasterization_pipeline: pipeline::RasterizationRenderPipeline,
     
     // descriptors & frames in flight
     frames_in_flight: Vec<PerFrameData>,
@@ -106,6 +107,7 @@ impl InternalApp {
         asset!("sky_compute.spv", assets);
         asset!("post_process_compute.spv", assets);
         asset!("voxel_interesting_compute.spv", assets);
+        asset!("rasterized.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -246,6 +248,8 @@ impl InternalApp {
         let voxel_compute_pipeline = pipeline::create_voxel_pipeline(assets["voxel_interesting_compute.spv"], &device, &debug_marker);
         log::info!("created voxel compute pipeline");
 
+        let rasterization_pipeline = pipeline::create_raster_pipeline(assets["rasterized.spv"], &device, &debug_marker);
+
         let (svo, svt) = voxel::create_sparse_structures(
             &device,
             &mut allocator,
@@ -271,7 +275,7 @@ impl InternalApp {
         log::info!("created skybox");
 
         let frames_in_flight = (0..crate::per_frame_data::FRAMES_IN_FLIGHT).into_iter().map(|_| {
-            PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &post_process_compute_pipeline)
+            PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &post_process_compute_pipeline, &rasterization_pipeline, &mut allocator, &debug_marker)
         }).collect::<Vec<_>>();
         log::info!("created frames in flight structures");
 
@@ -321,6 +325,7 @@ impl InternalApp {
             pool,
             render_compute_pipeline,
             sky_compute_pipeline,
+            rasterization_pipeline,
             descriptor_pool,
             query_pool,
             timestamp_period,
@@ -456,6 +461,7 @@ impl InternalApp {
             end_fence,
             cmd,
             per_frame_descriptor_sets,
+            uniform_buffer,
             ..
         } = &self.frames_in_flight[frame_in_flight_index as usize];
 
@@ -503,13 +509,13 @@ impl InternalApp {
 
         //log::debug!("frame in flight index: {frame_in_flight_index}, acquire swapchain image index: {acquired_swapchain_image_index}");
 
-        let descriptor_rt_image_view_info = vk::DescriptorImageInfo::default()
+        let descriptor_swapchain_image_view_info = vk::DescriptorImageInfo::default()
             .image_view(swapchain_image_view)
             .image_layout(vk::ImageLayout::GENERAL)
             .sampler(vk::Sampler::null());
 
         // rt image for compositor (write only)
-        let composition_compute_descriptor_image_infos_1 = [descriptor_rt_image_view_info];
+        let composition_compute_descriptor_image_infos_1 = [descriptor_swapchain_image_view_info];
         let composition_compute_image_descriptor_write_1 = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -517,7 +523,20 @@ impl InternalApp {
             .dst_set(per_frame_descriptor_sets.compositor_per_frame)
             .image_info(&composition_compute_descriptor_image_infos_1);
 
-        self.device.update_descriptor_sets(&[composition_compute_image_descriptor_write_1], &[]);
+
+        let descriptor_uniform_buffer_info = vk::DescriptorBufferInfo::default()
+            .buffer(uniform_buffer.buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+        let composition_compute_descriptor_image_infos_1 = [descriptor_uniform_buffer_info];
+        let render_rasterization_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .dst_binding(0)
+            .dst_set(per_frame_descriptor_sets.rasterizer_per_frame)
+            .buffer_info(&composition_compute_descriptor_image_infos_1);
+
+        self.device.update_descriptor_sets(&[composition_compute_image_descriptor_write_1, render_rasterization_descriptor_write], &[]);
 
         if suboptimal || self.was_resized {
             log::debug!("suboptimal: {suboptimal}");
@@ -586,6 +605,15 @@ impl InternalApp {
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
             .size(vk::WHOLE_SIZE);
+        let uniform_buffer_barrier = vk::BufferMemoryBarrier2::default()
+            .buffer(uniform_buffer.buffer)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .size(vk::WHOLE_SIZE);
         let svt_image_barrier = vk::ImageMemoryBarrier2::default()
             .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::GENERAL)
@@ -598,12 +626,84 @@ impl InternalApp {
             .image(self.svt.sparse_image)
             .subresource_range(subresource_range);
         let image_memory_barriers = [svt_image_barrier];
-        let buffer_memory_barriers = [lights_buffer_barrier];
+        let buffer_memory_barriers = [lights_buffer_barrier, uniform_buffer_barrier];
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
         self.device.cmd_pipeline_barrier2(cmd, &dep);
+
+        let size = self.window.inner_size();
+        let window_size_no_downscale = vek::Vec2::<u32>::new(size.width, size.height);
+        let size = vek::Vec2::<u32>::new(size.width, size.height) / self.args.downscale_factor;
+
+        let group_size = 2u32.pow(self.args.group_size_exp);
+        let size_f32 = size.map(|x| x as f32);
+
+        let matrix = self.movement.proj_matrix.inverted() * self.movement.view_matrix;
+
+        let push_constants = pipeline::PushConstants {
+            screen_resolution: size_f32,
+            _padding: Default::default(),
+            matrix,
+            position: self.movement.position.with_w(0f32),
+            sun: self.sun.normalized().with_w(0f32),
+            debug_type: self.debug_type,
+            time: elapsed,
+        };
+
+        let raw = bytemuck::bytes_of(&push_constants);
+
+        
+        let uniform_per_frame_data = pipeline::PerFrameUniformData {
+            view_matrix: self.movement.view_matrix,
+            projection_matrix: self.movement.proj_matrix,
+            inv_view_matrix: self.movement.view_matrix.inverted(),
+            inv_projection_matrix: self.movement.proj_matrix.inverted(),
+        };
+
+        //let p = uniform_per_frame_data.projection_matrix * (uniform_per_frame_data.view_matrix * vek::Vec4::new(0f32, 0f32, 0f32, 1f32));
+        //log::info!("{p}");
+
+        self.device.cmd_update_buffer(cmd, uniform_buffer.buffer, 0, bytemuck::bytes_of(&uniform_per_frame_data));
         
         self.device.cmd_update_buffer(cmd, self.lights_buffer.buffer, 0, bytemuck::cast_slice(&self.lights));
 
+        let render_area = vk::Rect2D::default()
+            .offset(vk::Offset2D::default())
+            .extent(vk::Extent2D::default().width(size.x).height(size.y));
+        let color_attachment = vk::RenderingAttachmentInfo::default()
+            .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0f32; 4] } })
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(self.const_descriptor_sets.rendered_image_view);
+        let depth_attachment = vk::RenderingAttachmentInfo::default()
+            .clear_value(vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1f32, stencil: 0 } })
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(self.const_descriptor_sets.rendered_depth_image_image_view);
+        let color_attachments = [color_attachment];
+        let rendering_info = vk::RenderingInfo::default()
+            .color_attachments(&color_attachments)
+            .depth_attachment(&depth_attachment)
+            .layer_count(1)
+            .render_area(render_area)
+            .view_mask(0);
+
+        self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline_layout, 0, &[per_frame_descriptor_sets.rasterizer_per_frame], &[]);
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline);
+
+
+        let viewport = vk::Viewport::default().height(size.y as f32).width(size.x as f32).x(0f32).y(0f32).min_depth(0f32).max_depth(1f32);
+        self.device.cmd_set_viewport(cmd, 0, &[viewport]);
+        self.device.cmd_set_scissor(cmd, 0, &[render_area]);
+        
+        self.device.cmd_begin_rendering(cmd, &rendering_info);
+
+        self.device.cmd_draw(cmd, 3, 1000, 0, 0);
+
+        self.device.cmd_end_rendering(cmd);
+        
+        /*
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
@@ -618,26 +718,6 @@ impl InternalApp {
             self.render_compute_pipeline.entry_points[0].pipeline,
         );
 
-        let size = self.window.inner_size();
-        let window_size_no_downscale = vek::Vec2::<u32>::new(size.width, size.height);
-        let size = vek::Vec2::<u32>::new(size.width, size.height) / self.args.downscale_factor;
-
-        let group_size = 2u32.pow(self.args.group_size_exp);
-        let size_f32 = size.map(|x| x as f32);
-
-        let matrix = self.movement.proj_matrix.inverted() * self.movement.view_matrix;
-        let push_constants = pipeline::PushConstants {
-            screen_resolution: size_f32,
-            _padding: Default::default(),
-            matrix,
-            position: self.movement.position.with_w(0f32),
-            sun: self.sun.normalized().with_w(0f32),
-            debug_type: self.debug_type,
-            time: elapsed,
-        };
-
-        let raw = bytemuck::bytes_of(&push_constants);
-
         self.device.cmd_push_constants(
             cmd,
             self.render_compute_pipeline.entry_points[0].pipeline_layout,
@@ -649,7 +729,7 @@ impl InternalApp {
         self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, self.query_pool, 0);
         self.device.cmd_dispatch(cmd, size.x.div_ceil(group_size), size.y.div_ceil(group_size), 1);
         self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, self.query_pool, 1);
-
+        */
         
         self.device.cmd_bind_descriptor_sets(
             cmd,
@@ -693,7 +773,7 @@ impl InternalApp {
             .new_layout(vk::ImageLayout::GENERAL)
             .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_READ)
-            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .src_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_queue_family_index(self.queue_family_index)
             .dst_queue_family_index(self.queue_family_index)
@@ -997,6 +1077,10 @@ impl InternalApp {
         self.voxel_compute_pipeline.destroy(&self.device);
         log::info!("destroyed voxel compute pipeline");
 
+        self.rasterization_pipeline.destroy(&self.device);
+        log::info!("destroyed rasterization pipeline");
+
+
         self.svo.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVO buffers & stuff");
 
@@ -1018,7 +1102,7 @@ impl InternalApp {
             .wait_for_fences(&fences, true, u64::MAX)
             .unwrap();
         for frame in self.frames_in_flight.into_iter() {
-            frame.destroy_everything(&self.device, self.pool);
+            frame.destroy_everything(&self.device, self.pool, &mut self.allocator);
         }
 
         self.const_descriptor_sets.destroy_rt_images_and_image_views(&self.device, self.descriptor_pool, &mut self.allocator);

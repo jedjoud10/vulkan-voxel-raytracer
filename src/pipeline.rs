@@ -18,6 +18,15 @@ pub struct PushConstants {
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
+pub struct PerFrameUniformData {
+    pub view_matrix: vek::Mat4<f32>,
+    pub projection_matrix: vek::Mat4<f32>,
+    pub inv_view_matrix: vek::Mat4<f32>,
+    pub inv_projection_matrix: vek::Mat4<f32>,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 pub struct PushConstants2 {
     pub forward: vek::Vec4<f32>,
     pub position: vek::Vec4<f32>,
@@ -47,6 +56,13 @@ pub struct MultiComputePipeline<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS
     pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SETS],
 }
 
+pub struct RasterizedPipeline<const DESCRIPTOR_SETS: usize> {
+    pub module: vk::ShaderModule,
+    pub pipeline: vk::Pipeline,
+    pub pipeline_layout: vk::PipelineLayout,
+    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SETS],
+}
+
 impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeline<ENTRY_POINTS, DESCRIPTOR_SETS> {
     pub unsafe fn destroy(self, device: &ash::Device) {
         for single_entry_point_wrapper in self.entry_points {
@@ -61,10 +77,23 @@ impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeli
     }
 }
 
+impl<const DESCRIPTOR_SETS: usize> RasterizedPipeline<DESCRIPTOR_SETS> {
+    pub unsafe fn destroy(self, device: &ash::Device) {
+        device.destroy_pipeline(self.pipeline, None);
+        device.destroy_pipeline_layout(self.pipeline_layout, None);
+        
+        for descriptor_set_layout in self.descriptor_set_layout {
+            device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+        }
+        device.destroy_shader_module(self.module, None);
+    }
+}
+
 pub type RenderPipeline = MultiComputePipeline<1, 2>;
 pub type PostProcessPipeline = MultiComputePipeline<3, 3>;
 pub type SkyPipeline = MultiComputePipeline<2, 1>;
 pub type VoxelPipeline = MultiComputePipeline<1, 1>;
+pub type RasterizationRenderPipeline = RasterizedPipeline<1>;
 
 #[derive(Pod, Zeroable, Copy, Clone)]
 #[repr(C)]
@@ -337,7 +366,7 @@ pub unsafe fn create_voxel_pipeline(
     let first_descriptor_set_layout = device
         .create_descriptor_set_layout(&first_descriptor_set_layout_create_info, None)
         .unwrap();
-    crate::debug::set_object_name(first_descriptor_set_layout, binder, "voxle compute shader descriptor set layout");
+    crate::debug::set_object_name(first_descriptor_set_layout, binder, "voxel compute shader descriptor set layout");
 
     let push_constant_size = Some(size_of::<vek::Vec4::<u32>>());
 
@@ -345,6 +374,119 @@ pub unsafe fn create_voxel_pipeline(
     let main_entry_point = create_single_entry_point_pipeline(device, binder, shader_module, "main", &descriptor_set_layouts, push_constant_size, None);
     
     MultiComputePipeline { module: shader_module, entry_points: [main_entry_point], descriptor_set_layout: [first_descriptor_set_layout] }
+}
+
+pub unsafe fn create_raster_pipeline(
+    raw: &[u32],
+    device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
+) -> RasterizationRenderPipeline {
+    let shader_module = create_shader_module(raw, device, binder, "rasterized shader module");
+
+    let vertex_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+        .flags(vk::PipelineShaderStageCreateFlags::empty())
+        .name(c"vertMain")
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shader_module);
+    let fragment_shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+        .flags(vk::PipelineShaderStageCreateFlags::empty())
+        .name(c"fragMain")
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shader_module);
+    let stages = [vertex_shader_stage_create_info, fragment_shader_stage_create_info];
+
+        
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
+        .dynamic_states(&dynamic_states);
+
+    let color_attachment_formats = [vk::Format::R16G16B16A16_SFLOAT];
+    let mut next = vk::PipelineRenderingCreateInfo::default()
+        .color_attachment_formats(&color_attachment_formats)
+        .depth_attachment_format(vk::Format::D32_SFLOAT);
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+        .primitive_restart_enable(false);
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default().scissor_count(1).viewport_count(1);
+    
+    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
+        .cull_mode(vk::CullModeFlags::NONE)
+        .polygon_mode(vk::PolygonMode::FILL)
+        .rasterizer_discard_enable(false)
+        .depth_clamp_enable(false)
+        .depth_bias_enable(false)
+        .line_width(1.0f32)
+        .front_face(vk::FrontFace::CLOCKWISE);
+
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .alpha_to_coverage_enable(false)
+        .alpha_to_one_enable(false)
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1)
+        .sample_shading_enable(false);
+    
+    let attachment = vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::ONE)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_color_blend_factor(vk::BlendFactor::ZERO)
+        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    let attachments = [attachment];
+    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
+        .logic_op_enable(false)
+        .attachments(&attachments);
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default()
+        .stencil_test_enable(false)
+        .depth_write_enable(true)
+        .depth_test_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+
+    
+    let uniform_buffer = vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(1);
+    let bindings = [uniform_buffer];
+    let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::empty())
+        .bindings(&bindings);
+    let descriptor_set_layout = device
+        .create_descriptor_set_layout(&descriptor_set_layout_create_info, None)
+        .unwrap();
+    crate::debug::set_object_name(descriptor_set_layout, binder, "rasterization descriptor set layout");
+
+    let set_layouts = [descriptor_set_layout];
+    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(&[])
+        .flags(vk::PipelineLayoutCreateFlags::empty())
+        .set_layouts(&set_layouts);
+
+    let pipeline_layout = device
+        .create_pipeline_layout(&pipeline_layout_create_info, None)
+        .unwrap();
+
+    let test = vk::GraphicsPipelineCreateInfo::default()
+        .render_pass(vk::RenderPass::null())
+        .dynamic_state(&dynamic_state)
+        .vertex_input_state(&vertex_input)
+        .input_assembly_state(&input_assembly_state)
+        .viewport_state(&viewport_state)
+        .rasterization_state(&rasterization_state)
+        .multisample_state(&multisample)
+        .color_blend_state(&color_blend_state)
+        .depth_stencil_state(&depth_stencil_state)
+        .stages(&stages)
+        .layout(pipeline_layout)
+        .push_next(&mut next);
+
+    let pipeline = device.create_graphics_pipelines(vk::PipelineCache::null(), &[test], None).unwrap()[0];
+
+
+    RasterizationRenderPipeline { module: shader_module, descriptor_set_layout: [descriptor_set_layout], pipeline, pipeline_layout }
 }
 
 unsafe fn create_shader_module(raw: &[u32], device: &ash::Device, binder: &Option<ash::ext::debug_utils::Device>, name: &str) -> vk::ShaderModule {
@@ -360,6 +502,84 @@ unsafe fn create_shader_module(raw: &[u32], device: &ash::Device, binder: &Optio
     log::debug!("created shader shader module '{name}'");
     shader_module
 }
+
+pub unsafe fn create_single_entry_point_pipeline(
+    device: &ash::Device,
+    binder: &Option<ash::ext::debug_utils::Device>,
+    compute_shader_module: vk::ShaderModule,
+    entry_point_name: &str,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    push_constant_size: Option<usize>,
+    spec_constants: Option<&[SpecConstant]>
+) -> SingleEntryPointWrapper {
+    let string = CString::from_str(entry_point_name).unwrap();
+
+    let mut specialization_entries = Vec::<vk::SpecializationMapEntry>::new();
+
+    let mut data = Vec::<u8>::new();
+    if let Some(spec_constants) = spec_constants {
+        let mut last_offset = 0u32;
+        for (i, spec) in spec_constants.iter().enumerate() {
+            specialization_entries.push(vk::SpecializationMapEntry::default()
+                .constant_id(i as u32)
+                .offset(last_offset)
+                .size(spec.bytes.len())
+            );
+            data.extend_from_slice(spec.bytes);
+            last_offset += spec.bytes.len() as u32;
+        }
+    }
+
+    let specialization_info = vk::SpecializationInfo::default()
+        .map_entries(&specialization_entries)
+        .data(&data);
+
+    log::info!("creating single entry point pipeline for {entry_point_name}. pc range: {push_constant_size:?}");
+    let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
+        .flags(vk::PipelineShaderStageCreateFlags::empty())
+        .name(string.as_c_str())
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .specialization_info(&specialization_info)
+        .module(compute_shader_module);
+        
+    let mut push_constant_ranges = SmallVec::<[vk::PushConstantRange;1]>::new();
+    if let Some(push_constant_size) = push_constant_size {
+        let push_constant_range = vk::PushConstantRange::default()
+            .offset(0)
+            .size(push_constant_size as u32)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE);
+        push_constant_ranges.push(push_constant_range);
+    };
+
+    let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
+        .push_constant_ranges(push_constant_ranges.as_slice())
+        .flags(vk::PipelineLayoutCreateFlags::empty())
+        .set_layouts(descriptor_set_layouts);
+    
+    let compute_pipeline_layout = device
+        .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
+        .unwrap();
+
+    crate::debug::set_object_name(compute_pipeline_layout, binder, format!("entry point '{entry_point_name}' compute pipeline layout"));
+    
+    let compute_pipeline_create_info = vk::ComputePipelineCreateInfo::default()
+        .layout(compute_pipeline_layout)
+        .stage(shader_stage_create_info);
+
+    let compute_pipelines = device
+        .create_compute_pipelines(
+            vk::PipelineCache::null(),
+            &[compute_pipeline_create_info],
+            None,
+        )
+        .unwrap();
+    
+    crate::debug::set_object_name(compute_pipelines[0], binder, format!("entry point '{entry_point_name}' compute pipeline"));
+
+    SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
+}
+
+
 
 /*
 pub unsafe fn create_tick_voxel_compute_pipeline(
@@ -447,81 +667,8 @@ pub unsafe fn create_tick_voxel_compute_pipeline(
 }
 */
 
-pub unsafe fn create_single_entry_point_pipeline(
-    device: &ash::Device,
-    binder: &Option<ash::ext::debug_utils::Device>,
-    compute_shader_module: vk::ShaderModule,
-    entry_point_name: &str,
-    descriptor_set_layouts: &[vk::DescriptorSetLayout],
-    push_constant_size: Option<usize>,
-    spec_constants: Option<&[SpecConstant]>
-) -> SingleEntryPointWrapper {
-    let string = CString::from_str(entry_point_name).unwrap();
 
-    let mut specialization_entries = Vec::<vk::SpecializationMapEntry>::new();
 
-    let mut data = Vec::<u8>::new();
-    if let Some(spec_constants) = spec_constants {
-        let mut last_offset = 0u32;
-        for (i, spec) in spec_constants.iter().enumerate() {
-            specialization_entries.push(vk::SpecializationMapEntry::default()
-                .constant_id(i as u32)
-                .offset(last_offset)
-                .size(spec.bytes.len())
-            );
-            data.extend_from_slice(spec.bytes);
-            last_offset += spec.bytes.len() as u32;
-        }
-    }
-
-    let specialization_info = vk::SpecializationInfo::default()
-        .map_entries(&specialization_entries)
-        .data(&data);
-
-    log::info!("creating single entry point pipline for {entry_point_name}. pc range: {push_constant_size:?}");
-    let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
-        .flags(vk::PipelineShaderStageCreateFlags::empty())
-        .name(string.as_c_str())
-        .stage(vk::ShaderStageFlags::COMPUTE)
-        .specialization_info(&specialization_info)
-        .module(compute_shader_module);
-        
-    let mut push_constant_ranges = SmallVec::<[vk::PushConstantRange;1]>::new();
-    if let Some(push_constant_size) = push_constant_size {
-        let push_constant_range = vk::PushConstantRange::default()
-            .offset(0)
-            .size(push_constant_size as u32)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE);
-        push_constant_ranges.push(push_constant_range);
-    };
-
-    let compute_pipeline_test_layout_create_info = vk::PipelineLayoutCreateInfo::default()
-        .push_constant_ranges(push_constant_ranges.as_slice())
-        .flags(vk::PipelineLayoutCreateFlags::empty())
-        .set_layouts(descriptor_set_layouts);
-    
-    let compute_pipeline_layout = device
-        .create_pipeline_layout(&compute_pipeline_test_layout_create_info, None)
-        .unwrap();
-
-    crate::debug::set_object_name(compute_pipeline_layout, binder, format!("entry point '{entry_point_name}' compute pipeline layout"));
-    
-    let compute_pipeline_create_info = vk::ComputePipelineCreateInfo::default()
-        .layout(compute_pipeline_layout)
-        .stage(shader_stage_create_info);
-
-    let compute_pipelines = device
-        .create_compute_pipelines(
-            vk::PipelineCache::null(),
-            &[compute_pipeline_create_info],
-            None,
-        )
-        .unwrap();
-    
-    crate::debug::set_object_name(compute_pipelines[0], binder, format!("entry point '{entry_point_name}' compute pipeline"));
-
-    SingleEntryPointWrapper { pipeline_layout: compute_pipeline_layout, pipeline: compute_pipelines[0] }
-}
 /*
 pub unsafe fn create_generate_voxel_compute_pipeline(
     raw: &[u32],

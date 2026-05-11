@@ -43,7 +43,8 @@ pub unsafe fn create_device_and_queue(
         .shader_int8(true);
     let mut device_features_13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
-        .maintenance4(true);
+        .maintenance4(true)
+        .dynamic_rendering(true);
 
     let device_extension_names = [
         ash::khr::swapchain::NAME,
@@ -51,6 +52,8 @@ pub unsafe fn create_device_and_queue(
         ash::khr::shader_atomic_int64::NAME,
         ash::khr::shader_clock::NAME,
         ash::ext::shader_image_atomic_int64::NAME,
+        ash::khr::shader_draw_parameters::NAME,
+        ash::khr::dynamic_rendering::NAME,
 
         // TODO: remove when ash vk1.4
         c"VK_KHR_compute_shader_derivatives",
