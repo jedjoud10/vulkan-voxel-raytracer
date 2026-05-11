@@ -5,6 +5,14 @@ pub const FULL_NODE: u32 = u32::MAX-1;
 pub const SVO_DEPTH: u32 = 5;
 pub const TOTAL_SIZE: u32 = 1 << (SVO_DEPTH * 2);
 
+pub fn try_offset_to_index(offset: vek::Vec3<usize>, size: usize) -> Option<usize> {
+    if offset.cmpge(&vek::Vec3::broadcast(0)).reduce_and() && offset.cmplt(&vek::Vec3::broadcast(size)).reduce_and() {
+        Some(offset.x + offset.y * size + offset.z * size * size)
+    } else {
+        None
+    }
+}
+
 pub fn offset_to_index(offset: vek::Vec3<usize>, size: usize) -> usize {
     assert!(offset.cmpge(&vek::Vec3::broadcast(0)).reduce_and());
     assert!(offset.cmplt(&vek::Vec3::broadcast(size)).reduce_and());

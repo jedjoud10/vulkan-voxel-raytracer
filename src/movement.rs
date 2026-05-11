@@ -100,7 +100,7 @@ impl Movement {
         self.target_fov = self.target_fov.clamp(0.05, 179.5);
         self.fov += (self.target_fov-self.fov).clamp(-100f32, 100f32) * delta * 20f32;
 
-        self.proj_matrix = vek::Mat4::<f32>::perspective_rh_zo(horizontal_to_vertical(self.fov, ratio), ratio, 0.001f32, 1000.0f32);
+        self.proj_matrix = vek::Mat4::<f32>::perspective_rh_no(horizontal_to_vertical(self.fov, ratio), ratio, 0.5f32, 10000.0f32);
         //self.proj_matrix = vek::Mat4::<f32>::infinite_perspective_rh(horizontal_to_vertical(self.fov, ratio), ratio, 1.0f32);
         let rot = vek::Mat4::from(self.rotation);
 

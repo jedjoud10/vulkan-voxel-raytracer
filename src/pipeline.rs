@@ -50,20 +50,20 @@ pub struct SpecConstant<'a> {
     pub bytes: &'a [u8],
 }
 
-pub struct MultiComputePipeline<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> {
+pub struct MultiComputePipeline<const ENTRY_POINTS: usize, const DESCRIPTOR_SET_LAYOUTS: usize> {
     pub module: vk::ShaderModule,
     pub entry_points: [SingleEntryPointWrapper; ENTRY_POINTS],
-    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SETS],
+    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SET_LAYOUTS],
 }
 
-pub struct RasterizedPipeline<const DESCRIPTOR_SETS: usize> {
+pub struct RasterizedPipeline<const DESCRIPTOR_SET_LAYOUTS: usize> {
     pub module: vk::ShaderModule,
     pub pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
-    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SETS],
+    pub descriptor_set_layout: [vk::DescriptorSetLayout; DESCRIPTOR_SET_LAYOUTS],
 }
 
-impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeline<ENTRY_POINTS, DESCRIPTOR_SETS> {
+impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SET_LAYOUTS: usize> MultiComputePipeline<ENTRY_POINTS, DESCRIPTOR_SET_LAYOUTS> {
     pub unsafe fn destroy(self, device: &ash::Device) {
         for single_entry_point_wrapper in self.entry_points {
             device.destroy_pipeline(single_entry_point_wrapper.pipeline, None);
@@ -77,7 +77,7 @@ impl<const ENTRY_POINTS: usize, const DESCRIPTOR_SETS: usize> MultiComputePipeli
     }
 }
 
-impl<const DESCRIPTOR_SETS: usize> RasterizedPipeline<DESCRIPTOR_SETS> {
+impl<const DESCRIPTOR_SET_LAYOUTS: usize> RasterizedPipeline<DESCRIPTOR_SET_LAYOUTS> {
     pub unsafe fn destroy(self, device: &ash::Device) {
         device.destroy_pipeline(self.pipeline, None);
         device.destroy_pipeline_layout(self.pipeline_layout, None);
@@ -405,12 +405,18 @@ pub unsafe fn create_raster_pipeline(
         .color_attachment_formats(&color_attachment_formats)
         .depth_attachment_format(vk::Format::D32_SFLOAT);
 
-    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+    let vertex_binding_descriptions = [vk::VertexInputBindingDescription::default().binding(0).input_rate(vk::VertexInputRate::VERTEX).stride(size_of::<vek::Vec3::<f32>>() as u32)];
+    let vertex_attribute_descriptions = [vk::VertexInputAttributeDescription::default().binding(0).format(vk::Format::R32G32B32_SFLOAT).location(0).offset(0)];
+    
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_binding_descriptions(&vertex_binding_descriptions)
+        .vertex_attribute_descriptions(&vertex_attribute_descriptions);
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
         .primitive_restart_enable(false);
     let viewport_state = vk::PipelineViewportStateCreateInfo::default().scissor_count(1).viewport_count(1);
     
+
     let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
         .cull_mode(vk::CullModeFlags::NONE)
         .polygon_mode(vk::PolygonMode::FILL)

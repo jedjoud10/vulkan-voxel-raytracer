@@ -544,7 +544,7 @@ pub unsafe fn transfer_layout_for_images(
 
     let depth_image_transition = vk::ImageMemoryBarrier2::default()
         .old_layout(vk::ImageLayout::UNDEFINED)
-        .new_layout(vk::ImageLayout::GENERAL)
+        .new_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
         .src_access_mask(vk::AccessFlags2::NONE)
         .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ)
         .src_stage_mask(vk::PipelineStageFlags2::NONE)

@@ -8,12 +8,14 @@ use crate::{buffer::{self}};
 mod sparse;
 mod util;
 mod chunk;
+mod meshes;
 
 use sparse::*;
 use util::*;
 pub use util::{TOTAL_SIZE};
 
 pub use sparse::SparseVoxelOctree;
+pub use meshes::VoxelMeshBuffers;
 
 pub unsafe fn create_sparse_structures(
     device: &ash::Device,
@@ -23,7 +25,7 @@ pub unsafe fn create_sparse_structures(
     pool: vk::CommandPool,
     queue_family_index: u32,
     force_regenerate: bool,
-) -> (SparseVoxelOctree, SparseVoxelTexture) {
+) -> (SparseVoxelOctree, SparseVoxelTexture, VoxelMeshBuffers) {
     let mut svo = SparseVoxelOctree::new_with_root_node(device, allocator, binder);
 
     let cached_folder_path = dirs::data_dir()
@@ -117,7 +119,9 @@ pub unsafe fn create_sparse_structures(
     let svt = create_sparse_voxel_texture(device, allocator, binder, queue, pool, queue_family_index, chunks);
     log::info!("created sparse voxel texture");
 
-    (svo, svt)
+    let meshed = VoxelMeshBuffers::new(&svo.chunks, device, pool, queue, allocator, binder);
+
+    (svo, svt, meshed)
 }
 
 pub struct SparseVoxelTexture {

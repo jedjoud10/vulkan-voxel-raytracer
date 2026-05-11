@@ -1,4 +1,5 @@
 #language slang 2026
+#include "hash.slang"
 
 struct UniformThing {
     float4x4 view_matrix;
@@ -10,17 +11,9 @@ struct UniformThing {
 [[vk::binding(0, 0)]]
 ParameterBlock<UniformThing> uniform_buffer;
 
-static float2 positions[3] = float2[](
-    float2(0.0, -0.5),
-    float2(0.5, 0.5),
-    float2(-0.5, 0.5)
-);
-
-static float3 colors[3] = float3[](
-    float3(1.0, 0.0, 0.0),
-    float3(0.0, 1.0, 0.0),
-    float3(0.0, 0.0, 1.0)
-);
+struct VertexInput {
+    float3 world;
+};
 
 struct VertexOutput {
     float3 color;
@@ -28,17 +21,17 @@ struct VertexOutput {
 };
 
 [shader("vertex")]
-VertexOutput vertMain(uint vid : SV_VertexID, uint instance : SV_InstanceID) {
+VertexOutput vertMain(VertexInput input) {
     VertexOutput output;
 
-    float4 world_position = float4(positions[vid % 3] * 1.0, instance, 1.0);
+    float4 world_position = float4(input.world, 1.0);
 
     float4 t = mul(mul(world_position, uniform_buffer.view_matrix), uniform_buffer.projection_matrix);
     t.y = -t.y;
     t.x = -t.x;
 
     output.sv_position = t;
-    output.color = saturate(world_position.xyz);
+    output.color = saturate((world_position.xyz % 64) / 64.0);
     return output;
 }
 

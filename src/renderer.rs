@@ -75,6 +75,7 @@ pub struct InternalApp {
     // sparse stuff
     svo: voxel::SparseVoxelOctree,
     svt: voxel::SparseVoxelTexture,
+    meshed: voxel::VoxelMeshBuffers,
         
     // important too
     allocator: gpu_allocator::vulkan::Allocator,
@@ -250,7 +251,7 @@ impl InternalApp {
 
         let rasterization_pipeline = pipeline::create_raster_pipeline(assets["rasterized.spv"], &device, &debug_marker);
 
-        let (svo, svt) = voxel::create_sparse_structures(
+        let (svo, svt, meshed) = voxel::create_sparse_structures(
             &device,
             &mut allocator,
             &debug_marker,
@@ -346,6 +347,7 @@ impl InternalApp {
             samplers,
             swapchain_images,
             swapchain_image_views,
+            meshed,
         }
     }
 
@@ -630,6 +632,8 @@ impl InternalApp {
         let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers).buffer_memory_barriers(&buffer_memory_barriers);
         self.device.cmd_pipeline_barrier2(cmd, &dep);
 
+        
+
         let size = self.window.inner_size();
         let window_size_no_downscale = vek::Vec2::<u32>::new(size.width, size.height);
         let size = vek::Vec2::<u32>::new(size.width, size.height) / self.args.downscale_factor;
@@ -673,13 +677,13 @@ impl InternalApp {
             .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0f32; 4] } })
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
-            .image_layout(vk::ImageLayout::GENERAL)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .image_view(self.const_descriptor_sets.rendered_image_view);
         let depth_attachment = vk::RenderingAttachmentInfo::default()
             .clear_value(vk::ClearValue { depth_stencil: vk::ClearDepthStencilValue { depth: 1f32, stencil: 0 } })
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::DONT_CARE)
-            .image_layout(vk::ImageLayout::GENERAL)
+            .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
             .image_view(self.const_descriptor_sets.rendered_depth_image_image_view);
         let color_attachments = [color_attachment];
         let rendering_info = vk::RenderingInfo::default()
@@ -689,9 +693,25 @@ impl InternalApp {
             .render_area(render_area)
             .view_mask(0);
 
+        let rendered_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(constant_descriptor_sets.rendered_image)
+            .subresource_range(subresource_range);
+        let image_memory_barriers = [rendered_image_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        self.device.cmd_pipeline_barrier2(cmd, &dep);
         self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline_layout, 0, &[per_frame_descriptor_sets.rasterizer_per_frame], &[]);
         self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline);
 
+        self.device.cmd_bind_vertex_buffers(cmd, 0, &[self.meshed.vertex_buffer.buffer], &[0]);
+        self.device.cmd_bind_index_buffer(cmd, self.meshed.index_buffer.buffer, 0, vk::IndexType::UINT32);
 
         let viewport = vk::Viewport::default().height(size.y as f32).width(size.x as f32).x(0f32).y(0f32).min_depth(0f32).max_depth(1f32);
         self.device.cmd_set_viewport(cmd, 0, &[viewport]);
@@ -699,10 +719,27 @@ impl InternalApp {
         
         self.device.cmd_begin_rendering(cmd, &rendering_info);
 
-        self.device.cmd_draw(cmd, 3, 1000, 0, 0);
+        for single_chunk in self.meshed.chunks.iter() {
+            self.device.cmd_draw_indexed(cmd, single_chunk.index_count as u32, 1, single_chunk.first_index as u32, single_chunk.vertex_start_offset as i32, 0);
+        }
 
         self.device.cmd_end_rendering(cmd);
-        
+
+        let rendered_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(constant_descriptor_sets.rendered_image)
+            .subresource_range(subresource_range);
+        let image_memory_barriers = [rendered_image_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        self.device.cmd_pipeline_barrier2(cmd, &dep);
+
         /*
         self.device.cmd_bind_descriptor_sets(
             cmd,
@@ -730,7 +767,7 @@ impl InternalApp {
         self.device.cmd_dispatch(cmd, size.x.div_ceil(group_size), size.y.div_ceil(group_size), 1);
         self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::COMPUTE_SHADER, self.query_pool, 1);
         */
-        
+
         self.device.cmd_bind_descriptor_sets(
             cmd,
             vk::PipelineBindPoint::COMPUTE,
@@ -1086,6 +1123,9 @@ impl InternalApp {
 
         self.svt.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVT");
+
+        self.meshed.destroy(&self.device, &mut self.allocator);
+        log::info!("destroyed meshed voxel buffers");
 
         self.skybox.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed skybox");
