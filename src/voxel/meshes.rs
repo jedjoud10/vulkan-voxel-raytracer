@@ -64,6 +64,7 @@ impl VoxelMeshBuffers {
 
     pub unsafe fn destroy(self, device: &ash::Device, allocator: &mut Allocator) {
         self.vertex_buffer.destroy(device, allocator);
+        self.index_buffer.destroy(device, allocator);
     }
 }
 

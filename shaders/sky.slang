@@ -222,6 +222,80 @@ float3 sky(float3 sun_dir, float3 ray_dir, float3 ray_pos, bool extraLightEnable
 }
 
 
+// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
+Optional<float> ray_plane_intersect_generic(float3 ray_dir, float3 ray_pos, float3 plane_normal, float3 plane_pos) {
+    float denom = dot(ray_dir, plane_normal);
+    if (abs(denom) > 0.0001f) // your favorite epsilon
+    {
+        float t = dot((plane_pos - ray_pos), plane_normal) / denom;
+
+        if (t >= 0) {
+            return Optional<float>(t);
+        } else {
+            return none;
+        }
+    }
+    return none;
+}
+
+// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
+Optional<float2> ray_plane_intersect_for_clouds(float3 ray_dir, float3 ray_pos, float plane_height) {
+    float denom = -ray_dir.y;
+    if (abs(denom) > 0.0001f) // your favorite epsilon
+    {
+        float t = -(plane_height - ray_pos.y) / denom;
+        float3 pos = t * ray_dir + ray_pos;
+
+        if (t >= 0) {
+            return Optional<float2>(pos.xz);
+        } else {
+            return none;
+        }
+    }
+    return none;
+}
+
+float4 clouds_interesting(float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
+    float4 clouds_colour_opacity = 0;
+    if (let pos = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 800)) {
+        if (let pos2 = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 840)) {
+            let uvs = pos.xy / 8000 + 0.5;
+            let uvs2 = pos2.xy / 8000 + 0.5;
+            let p1 = float3(pos.x, 800, pos.y);
+            let p2 = float3(pos2.x, 840, pos2.y);
+            let depth = distance(p1, p2);
+
+            if (all(uvs >= 0 & uvs <= 1)) {
+                for (int i = 0; i < 64; i++) {
+                    float factor = i / 64.0;
+                    float2 lerped = lerp(uvs, uvs2, factor);
+                    clouds_colour_opacity += clouds_sampler.Sample(lerped) / 64.0;
+                }
+            }
+
+        }   
+    }
+    return clouds_colour_opacity;
+}
+
+float4 clouds(float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
+    float4 clouds_colour_opacity = 0;
+    if (let pos = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 800)) {
+        let uvs = pos.xy / 8000 + 0.5;
+
+        if (all(uvs >= 0 & uvs <= 1)) {
+            clouds_colour_opacity = clouds_sampler.Sample(uvs);
+        }
+    }
+    return clouds_colour_opacity;
+}
+
+
+float3 sample_skybox_and_clouds(float3 ray_pos, float3 ray_dir, Sampler2D<float4> clouds_sampler, SamplerCube<float4> skybox_sampler) {
+    float4 clouds_colour_opacity = clouds(ray_dir, ray_pos, clouds_sampler);
+    float3 sky_colour = skybox_sampler.Sample(ray_dir).xyz;
+    return lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
+}
 
 
 // goated approximation for now

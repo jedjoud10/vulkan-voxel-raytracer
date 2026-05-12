@@ -61,74 +61,6 @@ float3 heatmap(float t) {
     ), 0.0, 1.0);
 }
 
-// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
-Optional<float> ray_plane_intersect_generic(float3 ray_dir, float3 ray_pos, float3 plane_normal, float3 plane_pos) {
-    float denom = dot(ray_dir, plane_normal);
-    if (abs(denom) > 0.0001f) // your favorite epsilon
-    {
-        float t = dot((plane_pos - ray_pos), plane_normal) / denom;
-
-        if (t >= 0) {
-            return Optional<float>(t);
-        } else {
-            return none;
-        }
-    }
-    return none;
-}
-
-// https://stackoverflow.com/questions/23975555/how-to-calculate-a-ray-plane-intersection#23976134
-Optional<float2> ray_plane_intersect_for_clouds(float3 ray_dir, float3 ray_pos, float plane_height) {
-    float denom = -ray_dir.y;
-    if (abs(denom) > 0.0001f) // your favorite epsilon
-    {
-        float t = -(plane_height - ray_pos.y) / denom;
-        float3 pos = t * ray_dir + ray_pos;
-
-        if (t >= 0) {
-            return Optional<float2>(pos.xz);
-        } else {
-            return none;
-        }
-    }
-    return none;
-}
-
-float4 clouds_interesting(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
-    float4 clouds_colour_opacity = 0;
-    if (let pos = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 800)) {
-        if (let pos2 = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 840)) {
-            let uvs = pos.xy / 8000 + 0.5;
-            let uvs2 = pos2.xy / 8000 + 0.5;
-            let p1 = float3(pos.x, 800, pos.y);
-            let p2 = float3(pos2.x, 840, pos2.y);
-            let depth = distance(p1, p2);
-
-            if (all(uvs >= 0 & uvs <= 1)) {
-                for (int i = 0; i < 64; i++) {
-                    float factor = i / 64.0;
-                    float2 lerped = lerp(uvs, uvs2, factor);
-                    clouds_colour_opacity += clouds_sampler.Sample(lerped) / 64.0;
-                }
-            }
-
-        }   
-    }
-    return clouds_colour_opacity;
-}
-
-float4 clouds(float3 sun_dir, float3 ray_dir, float3 ray_pos, Sampler2D<float4> clouds_sampler) {
-    float4 clouds_colour_opacity = 0;
-    if (let pos = ray_plane_intersect_for_clouds(ray_dir, ray_pos, 800)) {
-        let uvs = pos.xy / 8000 + 0.5;
-
-        if (all(uvs >= 0 & uvs <= 1)) {
-            clouds_colour_opacity = clouds_sampler.Sample(uvs);
-        }
-    }
-    return clouds_colour_opacity;
-}
-
 float4 dda<let N : int>(
     float3 ray_dir,
     float3 ray_pos,
@@ -406,12 +338,12 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                         float d = 0;
                         float strength = pow(dot(dir, sun.xyz), 40);
                         bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.004 + dir * 0.05, dir, svo, stats).hit;
-                        shadow += (t ? 0.0 : (strength * (1-clouds(sun.xyz, dir, shadow_ray_start, clouds_sampler).a))) / SHADOW_SAMPLES;
+                        shadow += (t ? 0.0 : (strength * (1-clouds(dir, shadow_ray_start, clouds_sampler).a))) / SHADOW_SAMPLES;
                     }
                 } else if (SHADOW_SAMPLES == 1) {
                     bool t = trace_shi<4096>((shadow_ray_start) + sun.xyz * 0.05, sun.xyz, svo, stats).hit;
                     //  - raymarch<256>(sun.xyz, shadow_ray_start).x * 20.0
-                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, sun.xyz, shadow_ray_start, clouds_sampler).a));
+                    shadow = (t ? 0.0 : 1 * (1-clouds(sun.xyz, shadow_ray_start, clouds_sampler).a));
                     //shadow = saturate(shadow);
 
                 } else {
@@ -448,6 +380,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
                 */
 
                 color *= temp_color;
+                output[id.xy] = float4(color, alpha);
 
                 break;
             }
@@ -455,10 +388,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
             alpha = 10;
 
             // ray miss stuff
-            float4 clouds_colour_opacity = clouds(sun.xyz, iterative_ray_dir, iterative_ray_pos, clouds_sampler);
-            float3 sky_colour = skybox_sampler.Sample(iterative_ray_dir).xyz;
-            float3 composed_sky_colour = lerp(sky_colour, clouds_colour_opacity.xyz, clouds_colour_opacity.w);
-            color *= composed_sky_colour;
+            color *= sample_skybox_and_clouds(iterative_ray_pos, iterative_ray_dir, clouds_sampler, skybox_sampler);
             break;
         }
 
@@ -471,7 +401,7 @@ void main(uint3 id: SV_DispatchThreadID, uint3 lid: SV_GroupThreadID, uint3 gid:
 #ifdef DEBUG
     switch (debug_type) {
         case DebugType::Combined:
-            output[id.xy] = float4(color, alpha);
+            //output[id.xy] = float4(color, alpha);
             break;
         case DebugType::Iterations:
             output[id.xy] = raymarch<64>(ray_dir, ray_pos);    

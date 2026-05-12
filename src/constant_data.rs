@@ -9,6 +9,7 @@ use crate::buffer;
 
 pub struct ConstantData {
     pub render_compute_pipeline_descriptor_set: vk::DescriptorSet,
+    pub sky_rasterization_render_pipeline_descriptor_set: vk::DescriptorSet,
     pub sky_compute_pipeline_descriptor_set: vk::DescriptorSet,
     pub voxel_compute_pipeline_descriptor_set: vk::DescriptorSet,
 
@@ -39,13 +40,14 @@ impl ConstantData {
         sky_compute_pipeline: &pipeline::SkyPipeline,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
         voxel_compute_pipeline: &pipeline::VoxelPipeline,
+        sky_background_rasterization_pipeline: &pipeline::RasterizationBackgroundPipeline,
         samplers: &samplers::Samplers,
         skybox: &skybox::Skybox,
         svt: &voxel::SparseVoxelTexture,
         svo: &voxel::SparseVoxelOctree,
         lights_buffer: &buffer::Buffer,
     ) -> Self {
-        let constant_descriptor_set_layouts = [render_compute_pipeline.descriptor_set_layout[1], sky_compute_pipeline.descriptor_set_layout[0], voxel_compute_pipeline.descriptor_set_layout[0]];
+        let constant_descriptor_set_layouts = [render_compute_pipeline.descriptor_set_layout[1], sky_compute_pipeline.descriptor_set_layout[0], voxel_compute_pipeline.descriptor_set_layout[0], sky_background_rasterization_pipeline.descriptor_set_layout[1]];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&constant_descriptor_set_layouts);
@@ -55,6 +57,7 @@ impl ConstantData {
         let render_compute_pipeline_descriptor_set= all_descriptor_sets[0];
         let sky_compute_pipeline_descriptor_set = all_descriptor_sets[1];
         let voxel_compute_pipeline_descriptor_set = all_descriptor_sets[2];
+        let sky_rasterization_render_pipeline_descriptor_set = all_descriptor_sets[3];
 
 
         let descriptor_skybox_image_info = vk::DescriptorImageInfo::default()
@@ -145,7 +148,16 @@ impl ConstantData {
             .image_info(&voxel_compute_descriptor_images_infos);
 
 
-        device.update_descriptor_sets(&[render_compute_skybox_descriptor_write, sky_compute_descriptor_write_1, render_compute_svt_images_descriptor_write, render_compute_svo_buffers_descriptor_write, voxel_compute_descriptor_write_1], &[]);
+        let background_sky_rasterization_descriptor_images_infos = [descriptor_skybox_sampler_info, descriptor_clouds_sampler_info];
+        let background_sky_rasterization_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(background_sky_rasterization_descriptor_images_infos.len() as u32)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .dst_binding(0)
+            .dst_set(sky_rasterization_render_pipeline_descriptor_set)
+            .image_info(&background_sky_rasterization_descriptor_images_infos);
+
+
+        device.update_descriptor_sets(&[render_compute_skybox_descriptor_write, sky_compute_descriptor_write_1, render_compute_svt_images_descriptor_write, render_compute_svo_buffers_descriptor_write, voxel_compute_descriptor_write_1, background_sky_rasterization_descriptor_write], &[]);
 
         let per_frame_descriptor_set_layouts = [render_compute_pipeline.descriptor_set_layout[0], post_process_compute_pipeline.descriptor_set_layout[0]];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
@@ -173,6 +185,7 @@ impl ConstantData {
             rendered_depth_image: vk::Image::null(),
             rendered_depth_image_allocation: None,
             rendered_depth_image_image_view: vk::ImageView::null(),
+            sky_rasterization_render_pipeline_descriptor_set,
         }
     }
     

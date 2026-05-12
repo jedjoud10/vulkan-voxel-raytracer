@@ -66,6 +66,8 @@ pub struct InternalApp {
     post_process_compute_pipeline: pipeline::PostProcessPipeline,
     voxel_compute_pipeline: pipeline::VoxelPipeline,
     rasterization_pipeline: pipeline::RasterizationRenderPipeline,
+    rasterization_background_pipeline: pipeline::RasterizationBackgroundPipeline,
+    
     
     // descriptors & frames in flight
     frames_in_flight: Vec<PerFrameData>,
@@ -109,6 +111,7 @@ impl InternalApp {
         asset!("post_process_compute.spv", assets);
         asset!("voxel_interesting_compute.spv", assets);
         asset!("rasterized.spv", assets);
+        asset!("sky_background.spv", assets);
 
         let window = event_loop
             .create_window(Window::default_attributes())
@@ -249,7 +252,11 @@ impl InternalApp {
         let voxel_compute_pipeline = pipeline::create_voxel_pipeline(assets["voxel_interesting_compute.spv"], &device, &debug_marker);
         log::info!("created voxel compute pipeline");
 
-        let rasterization_pipeline = pipeline::create_raster_pipeline(assets["rasterized.spv"], &device, &debug_marker);
+        let rasterization_pipeline = pipeline::create_render_rasterization_pipeline(assets["rasterized.spv"], &device, &debug_marker);
+        log::info!("created main render rasterization pipeline");
+
+        let rasterization_background_pipeline = pipeline::create_sky_rasterization_pipeline(assets["sky_background.spv"], &device, &debug_marker);
+        log::info!("created main render rasterization pipeline");
 
         let (svo, svt, meshed) = voxel::create_sparse_structures(
             &device,
@@ -276,7 +283,7 @@ impl InternalApp {
         log::info!("created skybox");
 
         let frames_in_flight = (0..crate::per_frame_data::FRAMES_IN_FLIGHT).into_iter().map(|_| {
-            PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &post_process_compute_pipeline, &rasterization_pipeline, &mut allocator, &debug_marker)
+            PerFrameData::create_per_frame_data(&device, pool, descriptor_pool, &post_process_compute_pipeline, &rasterization_pipeline, &rasterization_background_pipeline, &mut allocator, &debug_marker)
         }).collect::<Vec<_>>();
         log::info!("created frames in flight structures");
 
@@ -295,7 +302,7 @@ impl InternalApp {
         buffer::write_to_buffer(&device, pool, queue, lights_buffer.buffer, &mut allocator, bytemuck::cast_slice(lights.as_slice()));
         log::info!("created lights buffer");
 
-        let mut const_descriptor_sets = ConstantData::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &voxel_compute_pipeline, &samplers, &skybox, &svt, &svo, &lights_buffer);
+        let mut const_descriptor_sets = ConstantData::create_constant_descriptor_sets(&device, descriptor_pool, &render_compute_pipeline, &sky_compute_pipeline, &post_process_compute_pipeline, &voxel_compute_pipeline, &rasterization_background_pipeline, &samplers, &skybox, &svt, &svo, &lights_buffer);
         const_descriptor_sets.recreate_rt_images_and_image_views_and_update_descriptor_sets(&device, swapchain_format, &mut allocator, queue_family_index, extent, &debug_marker, descriptor_pool, &samplers, &post_process_compute_pipeline, args.downscale_factor);
         crate::constant_data::transfer_layout_for_images(&device, queue_family_index, &const_descriptor_sets, pool, queue);
         log::info!("created constant descriptor sets");
@@ -348,6 +355,7 @@ impl InternalApp {
             swapchain_images,
             swapchain_image_views,
             meshed,
+            rasterization_background_pipeline,
         }
     }
 
@@ -530,15 +538,23 @@ impl InternalApp {
             .buffer(uniform_buffer.buffer)
             .offset(0)
             .range(vk::WHOLE_SIZE);
-        let composition_compute_descriptor_image_infos_1 = [descriptor_uniform_buffer_info];
+        let render_rasterization_per_frame_buffer_infos = [descriptor_uniform_buffer_info];
         let render_rasterization_descriptor_write = vk::WriteDescriptorSet::default()
             .descriptor_count(1)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .dst_binding(0)
             .dst_set(per_frame_descriptor_sets.rasterizer_per_frame)
-            .buffer_info(&composition_compute_descriptor_image_infos_1);
+            .buffer_info(&render_rasterization_per_frame_buffer_infos);
 
-        self.device.update_descriptor_sets(&[composition_compute_image_descriptor_write_1, render_rasterization_descriptor_write], &[]);
+        let background_rasterization_per_frame_buffer_infos = [descriptor_uniform_buffer_info];
+        let background_rasterization_descriptor_write = vk::WriteDescriptorSet::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .dst_binding(0)
+            .dst_set(per_frame_descriptor_sets.background_rasterizer_per_frame)
+            .buffer_info(&background_rasterization_per_frame_buffer_infos);
+
+        self.device.update_descriptor_sets(&[composition_compute_image_descriptor_write_1, render_rasterization_descriptor_write, background_rasterization_descriptor_write], &[]);
 
         if suboptimal || self.was_resized {
             log::debug!("suboptimal: {suboptimal}");
@@ -670,12 +686,28 @@ impl InternalApp {
         
         self.device.cmd_update_buffer(cmd, self.lights_buffer.buffer, 0, bytemuck::cast_slice(&self.lights));
 
+
+        let rendered_image_barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(constant_descriptor_sets.rendered_image)
+            .subresource_range(subresource_range);
+        let image_memory_barriers = [rendered_image_barrier];
+        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
+        self.device.cmd_pipeline_barrier2(cmd, &dep);
+
         let render_area = vk::Rect2D::default()
             .offset(vk::Offset2D::default())
             .extent(vk::Extent2D::default().width(size.x).height(size.y));
         let color_attachment = vk::RenderingAttachmentInfo::default()
             .clear_value(vk::ClearValue { color: vk::ClearColorValue { float32: [0f32; 4] } })
-            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
             .store_op(vk::AttachmentStoreOp::STORE)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .image_view(self.const_descriptor_sets.rendered_image_view);
@@ -693,32 +725,23 @@ impl InternalApp {
             .render_area(render_area)
             .view_mask(0);
 
-        let rendered_image_barrier = vk::ImageMemoryBarrier2::default()
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .src_access_mask(vk::AccessFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-            .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-            .src_queue_family_index(self.queue_family_index)
-            .dst_queue_family_index(self.queue_family_index)
-            .image(constant_descriptor_sets.rendered_image)
-            .subresource_range(subresource_range);
-        let image_memory_barriers = [rendered_image_barrier];
-        let dep = vk::DependencyInfo::default().image_memory_barriers(&image_memory_barriers);
-        self.device.cmd_pipeline_barrier2(cmd, &dep);
-        self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline_layout, 0, &[per_frame_descriptor_sets.rasterizer_per_frame], &[]);
-        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline);
-
-        self.device.cmd_bind_vertex_buffers(cmd, 0, &[self.meshed.vertex_buffer.buffer], &[0]);
-        self.device.cmd_bind_index_buffer(cmd, self.meshed.index_buffer.buffer, 0, vk::IndexType::UINT32);
-
         let viewport = vk::Viewport::default().height(size.y as f32).width(size.x as f32).x(0f32).y(0f32).min_depth(0f32).max_depth(1f32);
         self.device.cmd_set_viewport(cmd, 0, &[viewport]);
         self.device.cmd_set_scissor(cmd, 0, &[render_area]);
         
         self.device.cmd_begin_rendering(cmd, &rendering_info);
 
+
+        // render background skybox and clouds
+        self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_background_pipeline.pipeline_layout, 0, &[per_frame_descriptor_sets.background_rasterizer_per_frame, constant_descriptor_sets.sky_rasterization_render_pipeline_descriptor_set], &[]);
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_background_pipeline.pipeline);
+        self.device.cmd_draw(cmd, 6, 1, 0, 0);
+
+        // render chunk meshes stuff
+        self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline_layout, 0, &[per_frame_descriptor_sets.rasterizer_per_frame], &[]);
+        self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.rasterization_pipeline.pipeline);
+        self.device.cmd_bind_vertex_buffers(cmd, 0, &[self.meshed.vertex_buffer.buffer], &[0]);
+        self.device.cmd_bind_index_buffer(cmd, self.meshed.index_buffer.buffer, 0, vk::IndexType::UINT32);
         for single_chunk in self.meshed.chunks.iter() {
             self.device.cmd_draw_indexed(cmd, single_chunk.index_count as u32, 1, single_chunk.first_index as u32, single_chunk.vertex_start_offset as i32, 0);
         }
@@ -1117,6 +1140,8 @@ impl InternalApp {
         self.rasterization_pipeline.destroy(&self.device);
         log::info!("destroyed rasterization pipeline");
 
+        self.rasterization_background_pipeline.destroy(&self.device);
+        log::info!("destroyed rasterization background pipeline");
 
         self.svo.destroy(&self.device, &mut self.allocator);
         log::info!("destroyed SVO buffers & stuff");

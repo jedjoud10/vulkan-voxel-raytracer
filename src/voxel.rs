@@ -185,7 +185,7 @@ unsafe fn create_sparse_voxel_texture(
         .mip_levels(1)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .flags(vk::ImageCreateFlags::SPARSE_RESIDENCY | vk::ImageCreateFlags::SPARSE_BINDING)
-        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST)
+        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
         .samples(vk::SampleCountFlags::TYPE_1)
         .queue_family_indices(&queue_family_indices)
         .tiling(vk::ImageTiling::OPTIMAL)

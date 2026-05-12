@@ -7,6 +7,7 @@ pub const FRAMES_IN_FLIGHT: usize = 3;
 pub struct PerFrameDescriptorSets {
     pub compositor_per_frame: vk::DescriptorSet,
     pub rasterizer_per_frame: vk::DescriptorSet,
+    pub background_rasterizer_per_frame: vk::DescriptorSet,
 }
 
 pub struct PerFrameData {
@@ -26,6 +27,7 @@ impl PerFrameData {
         descriptor_pool: vk::DescriptorPool,
         post_process_compute_pipeline: &pipeline::PostProcessPipeline,
         rasterized_pipeline: &pipeline::RasterizationRenderPipeline,
+        background_rasterized_pipeline: &pipeline::RasterizationBackgroundPipeline,
         allocator: &mut Allocator,
         binder: &Option<ash::ext::debug_utils::Device>,
     ) -> Self {
@@ -46,7 +48,7 @@ impl PerFrameData {
             .allocate_command_buffers(&cmd_buffer_create_info)
             .unwrap()[0];
 
-        let per_frame_descriptor_set_layouts = [post_process_compute_pipeline.descriptor_set_layout[1], rasterized_pipeline.descriptor_set_layout[0]];
+        let per_frame_descriptor_set_layouts = [post_process_compute_pipeline.descriptor_set_layout[1], rasterized_pipeline.descriptor_set_layout[0], background_rasterized_pipeline.descriptor_set_layout[0]];
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&per_frame_descriptor_set_layouts);
@@ -65,6 +67,7 @@ impl PerFrameData {
             per_frame_descriptor_sets: PerFrameDescriptorSets {
                 compositor_per_frame: all_descriptor_sets_for_frame[0],
                 rasterizer_per_frame: all_descriptor_sets_for_frame[1],
+                background_rasterizer_per_frame: all_descriptor_sets_for_frame[2],
             },
             uniform_buffer,
         }
